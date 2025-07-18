@@ -663,9 +663,10 @@ impl QQMusic {
         });
 
         if let Ok(Some(caps)) = QRC_LYRIC_RE.captures(&fixed_text)
-            && let Some(content) = caps.get(1) {
-                return content.as_str().to_string();
-            }
+            && let Some(content) = caps.get(1)
+        {
+            return content.as_str().to_string();
+        }
 
         decrypted_text.to_string()
     }
@@ -830,10 +831,11 @@ impl QQMusic {
     /// 则回退到使用 DES 解密。
     fn decrypt_with_fallback(&self, encrypted_str: &str) -> Result<String> {
         if let Ok(decoded_bytes) = BASE64_STANDARD.decode(encrypted_str)
-            && let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
-                info!("成功使用 Base64 解密。");
-                return Ok(decoded_str);
-            }
+            && let Ok(decoded_str) = String::from_utf8(decoded_bytes)
+        {
+            info!("成功使用 Base64 解密。");
+            return Ok(decoded_str);
+        }
         qrc_codec::decrypt_qrc(encrypted_str)
     }
 

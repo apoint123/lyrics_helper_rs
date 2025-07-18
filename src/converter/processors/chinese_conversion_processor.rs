@@ -233,26 +233,27 @@ impl ChineseConversionProcessor {
                     );
                 }
             } else if let Some(text) = line.line_text.as_mut()
-                && !text.is_empty() {
-                    let converted_text = convert(text, config_name);
-                    if pinyin_is_same(text, &converted_text) {
-                        *text = converted_text;
-                    } else {
-                        let char_by_char_converted: String = text
-                            .chars()
-                            .map(|c| {
-                                let mut char_str = [0u8; 4];
-                                convert(c.encode_utf8(&mut char_str), config_name)
-                            })
-                            .collect();
+                && !text.is_empty()
+            {
+                let converted_text = convert(text, config_name);
+                if pinyin_is_same(text, &converted_text) {
+                    *text = converted_text;
+                } else {
+                    let char_by_char_converted: String = text
+                        .chars()
+                        .map(|c| {
+                            let mut char_str = [0u8; 4];
+                            convert(c.encode_utf8(&mut char_str), config_name)
+                        })
+                        .collect();
 
-                        if pinyin_is_same(text, &char_by_char_converted) {
-                            *text = char_by_char_converted;
-                        } else {
-                            warn!("行 '{}' 转换后读音改变。保留原文。", text);
-                        }
+                    if pinyin_is_same(text, &char_by_char_converted) {
+                        *text = char_by_char_converted;
+                    } else {
+                        warn!("行 '{}' 转换后读音改变。保留原文。", text);
                     }
                 }
+            }
         }
     }
 }

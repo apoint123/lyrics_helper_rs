@@ -247,9 +247,11 @@ pub fn parse_ttml(
             match reader_check.read_event_into(&mut buf_check) {
                 Ok(Event::Text(e)) => {
                     if let Ok(text) = e.decode()
-                        && text.contains('\n') && text.trim().is_empty() {
-                            whitespace_nodes_with_newline += 1;
-                        }
+                        && text.contains('\n')
+                        && text.trim().is_empty()
+                    {
+                        whitespace_nodes_with_newline += 1;
+                    }
                 }
                 Ok(Event::Eof) | Err(_) => break,
                 _ => (),
@@ -922,25 +924,24 @@ fn process_text_event(e_text: &BytesText, state: &mut TtmlParserState) -> Result
             has_space = true;
         }
 
-        if has_space
-            && let Some(p_data) = state.body_state.current_p_element_data.as_mut() {
-                // 根据上一个音节是否是背景人声，找到正确的音节列表
-                let target_syllables = if was_background {
-                    p_data
-                        .background_section_accumulator
-                        .as_mut()
-                        .map(|bs| &mut bs.syllables)
-                } else {
-                    Some(&mut p_data.syllables_accumulator)
-                };
+        if has_space && let Some(p_data) = state.body_state.current_p_element_data.as_mut() {
+            // 根据上一个音节是否是背景人声，找到正确的音节列表
+            let target_syllables = if was_background {
+                p_data
+                    .background_section_accumulator
+                    .as_mut()
+                    .map(|bs| &mut bs.syllables)
+            } else {
+                Some(&mut p_data.syllables_accumulator)
+            };
 
-                // 更新最后一个音节的 `ends_with_space` 标志
-                if let Some(last_syl) = target_syllables.and_then(|s| s.last_mut())
-                    && !last_syl.ends_with_space
-                {
-                    last_syl.ends_with_space = true;
-                }
+            // 更新最后一个音节的 `ends_with_space` 标志
+            if let Some(last_syl) = target_syllables.and_then(|s| s.last_mut())
+                && !last_syl.ends_with_space
+            {
+                last_syl.ends_with_space = true;
             }
+        }
         // 消费掉这个空格，并重置状态，然后直接返回
         state.body_state.last_syllable_info = LastSyllableInfo::None;
         return Ok(());
@@ -1436,44 +1437,11 @@ fn finalize_p_for_word_mode(
 
 /// 解析 TTML 时间字符串到毫秒。
 fn parse_ttml_time_to_ms(time_str: &str) -> Result<u64, ConvertError> {
-    // 格式 1: "12.345s"
-    if let Some(stripped) = time_str.strip_suffix('s') {
-        if stripped.is_empty() || stripped.starts_with('.') || stripped.ends_with('.') {
-            return Err(ConvertError::InvalidTime(format!(
-                "时间戳 '{time_str}' 包含无效的秒格式"
-            )));
-        }
-        let seconds = stripped.parse::<f64>().map_err(|e| {
-            ConvertError::InvalidTime(format!(
-                "无法将秒值 '{stripped}' 从时间戳 '{time_str}' 解析为数字: {e}"
-            ))
-        })?;
-        if seconds.is_sign_negative() {
-            return Err(ConvertError::InvalidTime(format!(
-                "时间戳不能为负: '{time_str}'"
-            )));
-        }
-        let total_ms = seconds * 1000.0;
-        if total_ms > u64::MAX as f64 {
-            return Err(ConvertError::InvalidTime(format!(
-                "时间戳 '{time_str}' 超出可表示范围"
-            )));
-        }
-        return Ok(total_ms.round() as u64);
-    }
-
-    // 格式 2: "HH:MM:SS.mmm", "MM:SS.mmm", "SS.mmm"
-    let colon_parts: Vec<&str> = time_str.split(':').collect();
-    let hours: u64;
-    let minutes: u64;
-    let seconds: u64;
-    let milliseconds: u64;
-
-    // 辅助函数，用于解析毫秒部分（支持.1, .12, .123）
-    let parse_ms_part = |ms_str: &str, original_time_str: &str| -> Result<u64, ConvertError> {
+    // 解析毫秒部分（.1, .12, .123）
+    fn parse_decimal_ms_part(ms_str: &str, original_time_str: &str) -> Result<u64, ConvertError> {
         if ms_str.is_empty() || ms_str.len() > 3 || ms_str.chars().any(|c| !c.is_ascii_digit()) {
             return Err(ConvertError::InvalidTime(format!(
-                "毫秒部分 '{ms_str}' 在时间戳 '{original_time_str}' 中无效"
+                "毫秒部分 '{ms_str}' 在时间戳 '{original_time_str}' 中无效或格式错误 (只支持最多3位数字)"
             )));
         }
         let val = ms_str.parse::<u64>().map_err(|e| {
@@ -1481,123 +1449,120 @@ fn parse_ttml_time_to_ms(time_str: &str) -> Result<u64, ConvertError> {
                 "无法解析时间戳 '{original_time_str}' 中的毫秒部分 '{ms_str}': {e}"
             ))
         })?;
-        // 根据毫秒部分的长度补零
         Ok(val * 10u64.pow(3 - ms_str.len() as u32))
-    };
+    }
 
-    match colon_parts.len() {
-        3 => {
-            // HH:MM:SS.mmm
-            hours = colon_parts[0].parse().map_err(|e| {
-                ConvertError::InvalidTime(format!(
-                    "在 '{}' 中解析小时 '{}' 失败: {}",
-                    time_str, colon_parts[0], e
-                ))
-            })?;
-            minutes = colon_parts[1].parse().map_err(|e| {
-                ConvertError::InvalidTime(format!(
-                    "在 '{}' 中解析分钟 '{}' 失败: {}",
-                    time_str, colon_parts[1], e
-                ))
-            })?;
-            let dot_parts: Vec<&str> = colon_parts[2].split('.').collect();
-            if dot_parts[0].is_empty() {
-                return Err(ConvertError::InvalidTime(format!(
-                    "时间格式 '{time_str}' 无效。"
-                )));
-            }
-            seconds = dot_parts[0].parse().map_err(|e| {
-                ConvertError::InvalidTime(format!(
-                    "在 '{}' 中解析秒 '{}' 失败: {}",
-                    time_str, dot_parts[0], e
-                ))
-            })?;
-            milliseconds = if dot_parts.len() == 2 {
-                parse_ms_part(dot_parts[1], time_str)?
-            } else if dot_parts.len() == 1 {
-                0
-            } else {
-                return Err(ConvertError::InvalidTime(format!(
-                    "时间格式 '{time_str}' 无效。"
-                )));
-            };
-        }
-        2 => {
-            // MM:SS.mmm
-            hours = 0;
-            minutes = colon_parts[0].parse().map_err(|e| {
-                ConvertError::InvalidTime(format!(
-                    "在 '{}' 中解析分钟 '{}' 失败: {}",
-                    time_str, colon_parts[0], e
-                ))
-            })?;
-            let dot_parts: Vec<&str> = colon_parts[1].split('.').collect();
-            if dot_parts[0].is_empty() {
-                return Err(ConvertError::InvalidTime(format!(
-                    "时间格式 '{time_str}' 无效。"
-                )));
-            }
-            seconds = dot_parts[0].parse().map_err(|e| {
-                ConvertError::InvalidTime(format!(
-                    "在 '{}' 中解析秒 '{}' 失败: {}",
-                    time_str, dot_parts[0], e
-                ))
-            })?;
-            milliseconds = if dot_parts.len() == 2 {
-                parse_ms_part(dot_parts[1], time_str)?
-            } else if dot_parts.len() == 1 {
-                0
-            } else {
-                return Err(ConvertError::InvalidTime(format!(
-                    "时间格式 '{time_str}' 无效。"
-                )));
-            };
-        }
-        1 => {
-            // SS.mmm 或 SS
-            hours = 0;
-            minutes = 0;
-            let dot_parts: Vec<&str> = colon_parts[0].split('.').collect();
-            if dot_parts[0].is_empty() {
-                return Err(ConvertError::InvalidTime(format!(
-                    "时间格式 '{time_str}' 无效。"
-                )));
-            }
-            seconds = dot_parts[0].parse().map_err(|e| {
-                ConvertError::InvalidTime(format!(
-                    "在 '{}' 中解析秒 '{}' 失败: {}",
-                    time_str, dot_parts[0], e
-                ))
-            })?;
-            milliseconds = if dot_parts.len() == 2 {
-                parse_ms_part(dot_parts[1], time_str)?
-            } else if dot_parts.len() == 1 {
-                0
-            } else {
-                return Err(ConvertError::InvalidTime(format!(
-                    "时间格式 '{time_str}' 无效。"
-                )));
-            };
-        }
-        _ => {
+    // 解析 "SS.mmm" 或 "SS" 格式的字符串，返回秒和毫秒
+    fn parse_seconds_and_decimal_ms_part(
+        seconds_and_ms_str: &str,
+        original_time_str: &str,
+    ) -> Result<(u64, u64), ConvertError> {
+        let mut dot_parts = seconds_and_ms_str.splitn(2, '.');
+        let seconds_str = dot_parts.next().unwrap(); // 肯定有
+
+        if seconds_str.is_empty() {
+            // 例如 ".5s" 或 "MM:.5"
             return Err(ConvertError::InvalidTime(format!(
-                "时间格式 '{time_str}' 无效。"
+                "时间格式 '{original_time_str}' 的秒部分为空 (例如 '.mmm')"
             )));
         }
+
+        let seconds = seconds_str.parse::<u64>().map_err(|e| {
+            ConvertError::InvalidTime(format!(
+                "在时间戳 '{original_time_str}' 中解析秒 '{seconds_str}' 失败: {e}"
+            ))
+        })?;
+
+        let milliseconds = if let Some(ms_str) = dot_parts.next() {
+            parse_decimal_ms_part(ms_str, original_time_str)?
+        } else {
+            0
+        };
+
+        Ok((seconds, milliseconds))
     }
 
-    if minutes >= 60 {
-        return Err(ConvertError::InvalidTime(format!(
-            "分钟值 '{minutes}' (应 < 60) 在时间戳 '{time_str}' 中无效"
-        )));
-    }
-    if (colon_parts.len() > 1) && seconds >= 60 {
-        return Err(ConvertError::InvalidTime(format!(
-            "秒值 '{seconds}' (应 < 60) 在时间戳 '{time_str}' 中无效"
-        )));
-    }
+    // 格式："12.345s"
+    if let Some(stripped) = time_str.strip_suffix('s') {
+        if stripped.is_empty() || stripped.starts_with('.') || stripped.ends_with('.') {
+            return Err(ConvertError::InvalidTime(format!(
+                "时间戳 '{time_str}' 包含无效的秒格式"
+            )));
+        }
+        if stripped.starts_with('-') {
+            return Err(ConvertError::InvalidTime(format!(
+                "时间戳不能为负: '{time_str}'"
+            )));
+        }
 
-    Ok(hours * 3_600_000 + minutes * 60_000 + seconds * 1000 + milliseconds)
+        let (seconds, milliseconds) = parse_seconds_and_decimal_ms_part(stripped, time_str)?;
+
+        Ok(seconds * 1000 + milliseconds)
+    } else {
+        // 格式："HH:MM:SS.mmm", "MM:SS.mmm", "SS.mmm"
+        // 从后往前解析以简化逻辑
+        let mut parts_iter = time_str.split(':').rev(); // 倒序迭代
+
+        let mut total_ms: u64 = 0;
+
+        // 解析最后一个部分 (SS.mmm 或 SS)
+        let current_part_str = parts_iter.next().ok_or_else(|| {
+            ConvertError::InvalidTime(format!("时间格式 '{time_str}' 无效或为空"))
+        })?;
+
+        if current_part_str.starts_with('-') {
+            // 检查负数
+            return Err(ConvertError::InvalidTime(format!(
+                "时间戳不能为负: '{time_str}'"
+            )));
+        }
+
+        let (seconds, milliseconds) =
+            parse_seconds_and_decimal_ms_part(current_part_str, time_str)?;
+        total_ms += seconds * 1000 + milliseconds;
+
+        // 解析倒数第二个部分 (分钟 MM)
+        if let Some(minutes_str) = parts_iter.next() {
+            let minutes = minutes_str.parse::<u64>().map_err(|e| {
+                ConvertError::InvalidTime(format!(
+                    "在 '{time_str}' 中解析分钟 '{minutes_str}' 失败: {e}"
+                ))
+            })?;
+            if minutes >= 60 {
+                return Err(ConvertError::InvalidTime(format!(
+                    "分钟值 '{minutes}' (应 < 60) 在时间戳 '{time_str}' 中无效"
+                )));
+            }
+            total_ms += minutes * 60_000;
+        }
+
+        // 解析倒数第三个部分 (小时 HH)
+        if let Some(hours_str) = parts_iter.next() {
+            let hours = hours_str.parse::<u64>().map_err(|e| {
+                ConvertError::InvalidTime(format!(
+                    "在 '{time_str}' 中解析小时 '{hours_str}' 失败: {e}"
+                ))
+            })?;
+            total_ms += hours * 3_600_000;
+        }
+
+        if parts_iter.next().is_some() {
+            return Err(ConvertError::InvalidTime(format!(
+                "时间格式 '{time_str}' 包含过多部分，格式无效。"
+            )));
+        }
+
+        // 如果是单独的 "SS.mmm" 格式，秒数可以大于59。
+        // 否则（HH:MM:SS 或 MM:SS），秒数必须小于60。
+        let num_colon_parts = time_str.chars().filter(|&c| c == ':').count();
+        if num_colon_parts > 0 && seconds >= 60 {
+            return Err(ConvertError::InvalidTime(format!(
+                "秒值 '{seconds}' (应 < 60) 在时间戳 '{time_str}' 中无效"
+            )));
+        }
+
+        Ok(total_ms)
+    }
 }
 
 /// 规范化文本中的空白字符
@@ -1646,6 +1611,10 @@ mod tests {
 
     #[test]
     fn test_parse_ttml_time_to_ms() {
+        assert_eq!(parse_ttml_time_to_ms("7.1s").unwrap(), 7100);
+        assert_eq!(parse_ttml_time_to_ms("7.12s").unwrap(), 7120);
+        assert_eq!(parse_ttml_time_to_ms("7.123s").unwrap(), 7123);
+        assert_eq!(parse_ttml_time_to_ms("99999.123s").unwrap(), 99999123);
         assert_eq!(parse_ttml_time_to_ms("01:02:03.456").unwrap(), 3723456);
         assert_eq!(parse_ttml_time_to_ms("05:10.1").unwrap(), 310100);
         assert_eq!(parse_ttml_time_to_ms("05:10.12").unwrap(), 310120);
@@ -1657,6 +1626,9 @@ mod tests {
         assert_eq!(parse_ttml_time_to_ms("0").unwrap(), 0);
         assert_eq!(parse_ttml_time_to_ms("0.0s").unwrap(), 0);
         assert_eq!(parse_ttml_time_to_ms("00:00:00.000").unwrap(), 0);
+        assert_eq!(parse_ttml_time_to_ms("99:59:59.999").unwrap(), 359999999);
+        assert_eq!(parse_ttml_time_to_ms("60").unwrap(), 60000);
+        assert_eq!(parse_ttml_time_to_ms("123.456").unwrap(), 123456);
 
         assert!(matches!(
             parse_ttml_time_to_ms("abc"),
@@ -1679,6 +1651,10 @@ mod tests {
             Err(ConvertError::InvalidTime(_))
         ));
         assert!(matches!(
+            parse_ttml_time_to_ms("-01:00:00.000"),
+            Err(ConvertError::InvalidTime(_))
+        ));
+        assert!(matches!(
             parse_ttml_time_to_ms("10.s"),
             Err(ConvertError::InvalidTime(_))
         ));
@@ -1691,11 +1667,23 @@ mod tests {
             Err(ConvertError::InvalidTime(_))
         ));
         assert!(matches!(
+            parse_ttml_time_to_ms("10.1234s"),
+            Err(ConvertError::InvalidTime(_))
+        ));
+        assert!(matches!(
+            parse_ttml_time_to_ms("10.abcs"),
+            Err(ConvertError::InvalidTime(_))
+        ));
+        assert!(matches!(
             parse_ttml_time_to_ms("10.1234"),
             Err(ConvertError::InvalidTime(_))
         ));
         assert!(matches!(
             parse_ttml_time_to_ms("10.abc"),
+            Err(ConvertError::InvalidTime(_))
+        ));
+        assert!(matches!(
+            parse_ttml_time_to_ms("01:00:.000"),
             Err(ConvertError::InvalidTime(_))
         ));
     }
