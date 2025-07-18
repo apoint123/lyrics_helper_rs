@@ -307,8 +307,7 @@ impl Provider for QQMusic {
     async fn get_playlist(&self, playlist_id: &str) -> Result<generic::Playlist> {
         let disstid = playlist_id.parse::<u64>().map_err(|_| {
             LyricsHelperError::ApiError(format!(
-                "无效的播放列表 ID: '{}'，必须是纯数字。",
-                playlist_id
+                "无效的播放列表 ID: '{playlist_id}'，必须是纯数字。"
             ))
         })?;
 
@@ -663,11 +662,10 @@ impl QQMusic {
             format!("{}{}\"", attr, value.replace('"', "&quot;"))
         });
 
-        if let Ok(Some(caps)) = QRC_LYRIC_RE.captures(&fixed_text) {
-            if let Some(content) = caps.get(1) {
+        if let Ok(Some(caps)) = QRC_LYRIC_RE.captures(&fixed_text)
+            && let Some(content) = caps.get(1) {
                 return content.as_str().to_string();
             }
-        }
 
         decrypted_text.to_string()
     }
@@ -831,12 +829,11 @@ impl QQMusic {
     /// 优先尝试 Base64 解码，如果失败或结果不是有效的 UTF-8 字符串，
     /// 则回退到使用 DES 解密。
     fn decrypt_with_fallback(&self, encrypted_str: &str) -> Result<String> {
-        if let Ok(decoded_bytes) = BASE64_STANDARD.decode(encrypted_str) {
-            if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
+        if let Ok(decoded_bytes) = BASE64_STANDARD.decode(encrypted_str)
+            && let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
                 info!("成功使用 Base64 解密。");
                 return Ok(decoded_str);
             }
-        }
         qrc_codec::decrypt_qrc(encrypted_str)
     }
 

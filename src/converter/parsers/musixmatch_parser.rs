@@ -38,11 +38,10 @@ pub fn parse(json_content: &str) -> Result<ParsedSourceData, ConvertError> {
                     continue;
                 }
 
-                if original_text.starts_with(char::is_whitespace) {
-                    if let Some(last_syllable) = syllables_accumulator.last_mut() {
+                if original_text.starts_with(char::is_whitespace)
+                    && let Some(last_syllable) = syllables_accumulator.last_mut() {
                         last_syllable.ends_with_space = true;
                     }
-                }
 
                 let new_syllable = LyricSyllable {
                     text: trimmed_text.to_string(),

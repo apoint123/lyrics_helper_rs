@@ -673,8 +673,8 @@ mod qrc_logic {
         fn initial_permutation(state: &mut [u32; 2], input: &[u8]) {
             state.fill(0);
             let t = &TABLES.ip_table;
-            for i in 0..8 {
-                let lookup = t[i][input[i] as usize];
+            for (t_slice, &input_byte) in t.iter().zip(input.iter()) {
+                let lookup = t_slice[input_byte as usize];
                 state[0] |= lookup.0;
                 state[1] |= lookup.1;
             }
@@ -684,11 +684,12 @@ mod qrc_logic {
         fn inverse_permutation(state: &[u32; 2], output: &mut [u8]) {
             let t = &TABLES.inv_ip_table;
             let mut result = 0u64;
-            for i in 0..8 {
+            for (i, t_slice) in t.iter().enumerate() {
                 let byte_chunk =
                     (if i < 4 { state[0] } else { state[1] } >> (24 - (i % 4) * 8)) & 0xFF;
-                result |= t[i][byte_chunk as usize];
+                result |= t_slice[byte_chunk as usize];
             }
+
             output.copy_from_slice(&result.to_be_bytes());
         }
 

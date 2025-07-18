@@ -232,8 +232,8 @@ impl ChineseConversionProcessor {
                             .collect(),
                     );
                 }
-            } else if let Some(text) = line.line_text.as_mut() {
-                if !text.is_empty() {
+            } else if let Some(text) = line.line_text.as_mut()
+                && !text.is_empty() {
                     let converted_text = convert(text, config_name);
                     if pinyin_is_same(text, &converted_text) {
                         *text = converted_text;
@@ -253,7 +253,6 @@ impl ChineseConversionProcessor {
                         }
                     }
                 }
-            }
         }
     }
 }

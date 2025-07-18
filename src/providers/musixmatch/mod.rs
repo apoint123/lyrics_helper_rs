@@ -481,8 +481,7 @@ impl Provider for MusixmatchClient {
             })
         } else {
             Err(LyricsHelperError::ApiError(format!(
-                "获取专辑信息失败 (ID: {})",
-                album_id
+                "获取专辑信息失败 (ID: {album_id})"
             )))
         }
     }

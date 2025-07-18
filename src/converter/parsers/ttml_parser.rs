@@ -246,11 +246,10 @@ pub fn parse_ttml(
 
             match reader_check.read_event_into(&mut buf_check) {
                 Ok(Event::Text(e)) => {
-                    if let Ok(text) = e.decode() {
-                        if text.contains('\n') && text.trim().is_empty() {
+                    if let Ok(text) = e.decode()
+                        && text.contains('\n') && text.trim().is_empty() {
                             whitespace_nodes_with_newline += 1;
                         }
-                    }
                 }
                 Ok(Event::Eof) | Err(_) => break,
                 _ => (),
@@ -923,8 +922,8 @@ fn process_text_event(e_text: &BytesText, state: &mut TtmlParserState) -> Result
             has_space = true;
         }
 
-        if has_space {
-            if let Some(p_data) = state.body_state.current_p_element_data.as_mut() {
+        if has_space
+            && let Some(p_data) = state.body_state.current_p_element_data.as_mut() {
                 // 根据上一个音节是否是背景人声，找到正确的音节列表
                 let target_syllables = if was_background {
                     p_data
@@ -942,7 +941,6 @@ fn process_text_event(e_text: &BytesText, state: &mut TtmlParserState) -> Result
                     last_syl.ends_with_space = true;
                 }
             }
-        }
         // 消费掉这个空格，并重置状态，然后直接返回
         state.body_state.last_syllable_info = LastSyllableInfo::None;
         return Ok(());
