@@ -336,27 +336,23 @@ pub fn parse_ttml(
             }
         };
 
-        if let Event::Start(e) = &event {
-            if e.local_name().as_ref() == TAG_METADATA {
-                reader.read_to_end(e.name())?;
-                let end_pos = reader.buffer_position();
-                let metadata_slice = &content[event_start_pos as usize..end_pos as usize];
+        if let Event::Start(e) = &event
+            && e.local_name().as_ref() == TAG_METADATA
+        {
+            reader.read_to_end(e.name())?;
+            let end_pos = reader.buffer_position();
+            let metadata_slice = &content[event_start_pos as usize..end_pos as usize];
 
-                match from_str::<Metadata>(metadata_slice) {
-                    Ok(metadata_struct) => {
-                        process_deserialized_metadata(
-                            metadata_struct,
-                            &mut state,
-                            &mut raw_metadata,
-                        );
-                    }
-                    Err(de_error) => {
-                        warnings.push(format!("解析 metadata 标签失败: {}", de_error));
-                    }
+            match from_str::<Metadata>(metadata_slice) {
+                Ok(metadata_struct) => {
+                    process_deserialized_metadata(metadata_struct, &mut state, &mut raw_metadata);
                 }
-                buf.clear();
-                continue;
+                Err(de_error) => {
+                    warnings.push(format!("解析 metadata 标签失败: {de_error}"));
+                }
             }
+            buf.clear();
+            continue;
         }
 
         if state.body_state.in_p {

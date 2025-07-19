@@ -9,7 +9,7 @@ use crate::converter::{
     types::{
         BackgroundSection, ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData,
     },
-    utils::{parse_lrc_metadata_tag, process_syllable_text},
+    utils::{parse_and_store_metadata, process_syllable_text},
 };
 
 // 匹配 LYS 行首的属性标签，如 `[4]`
@@ -121,7 +121,7 @@ pub fn parse_lys(content: &str) -> Result<ParsedSourceData, ConvertError> {
         }
 
         // 解析元数据
-        if parse_lrc_metadata_tag(trimmed_line, &mut raw_metadata) {
+        if parse_and_store_metadata(trimmed_line, &mut raw_metadata) {
             continue;
         }
 

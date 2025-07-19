@@ -12,7 +12,7 @@ use crate::converter::{
         ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData, RomanizationEntry,
         TranslationEntry,
     },
-    utils::{normalize_text_whitespace, parse_lrc_metadata_tag, process_syllable_text},
+    utils::{normalize_text_whitespace, parse_and_store_metadata, process_syllable_text},
 };
 
 /// 匹配 KRC 行级时间戳 `[start,duration]`
@@ -55,7 +55,7 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
             continue;
         }
 
-        if parse_lrc_metadata_tag(trimmed_line, &mut raw_metadata) {
+        if parse_and_store_metadata(trimmed_line, &mut raw_metadata) {
             continue;
         }
 

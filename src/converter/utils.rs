@@ -61,15 +61,22 @@ static METADATA_TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// # 返回
 /// `true` - 如果该行是有效的元数据标签并已处理。
 /// `false` - 如果该行不是元数据标签。
-pub fn parse_lrc_metadata_tag(line: &str, raw_metadata: &mut HashMap<String, Vec<String>>) -> bool {
+pub fn parse_and_store_metadata(
+    line: &str,
+    raw_metadata: &mut HashMap<String, Vec<String>>,
+) -> bool {
     if let Some(caps) = METADATA_TAG_REGEX.captures(line)
-        && let (Some(key), Some(value)) = (caps.name("key"), caps.name("value"))
+        && let (Some(key_match), Some(value_match)) = (caps.name("key"), caps.name("value"))
     {
-        raw_metadata
-            .entry(key.as_str().to_string())
-            .or_default()
-            .push(value.as_str().to_string());
-        return true;
+        let key = key_match.as_str().trim();
+        if !key.is_empty() {
+            let normalized_value = normalize_text_whitespace(value_match.as_str());
+            raw_metadata
+                .entry(key.to_string())
+                .or_default()
+                .push(normalized_value);
+            return true;
+        }
     }
     false
 }

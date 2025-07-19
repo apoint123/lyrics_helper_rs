@@ -9,7 +9,7 @@ use crate::converter::{
     types::{
         ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData, TranslationEntry,
     },
-    utils::normalize_text_whitespace,
+    utils::{normalize_text_whitespace, parse_and_store_metadata},
 };
 
 /// 用于匹配一个完整的 LRC 歌词行，捕获时间戳部分和文本部分
@@ -22,10 +22,7 @@ static LRC_TIMESTAMP_EXTRACT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[(\d{2,}):(\d{2})[.:](\d{2,3})\]").expect("未能编译 LRC_TIMESTAMP_EXTRACT_REGEX")
 });
 
-/// 用于匹配 [key:value] 格式的元数据标签
-static LRC_METADATA_TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\[([a-zA-Z_][a-zA-Z0-9_]*):(.*?)\]$").expect("未能编译 LRC_METADATA_TAG_REGEX")
-});
+const DEFAULT_LAST_LINE_DURATION_MS: u64 = 10000;
 
 /// 解析 LRC 格式内容到 `ParsedSourceData` 结构。
 pub fn parse_lrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
@@ -49,19 +46,7 @@ pub fn parse_lrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
         }
 
         // 解析元数据标签
-        if let Some(meta_caps) = LRC_METADATA_TAG_REGEX.captures(line_str_trimmed) {
-            let key = meta_caps
-                .get(1)
-                .map_or("", |m| m.as_str())
-                .trim()
-                .to_string();
-            let value = meta_caps.get(2).map_or("", |m| m.as_str());
-            let normalized_value = normalize_text_whitespace(value);
-
-            if !key.is_empty() {
-                raw_metadata.entry(key).or_default().push(normalized_value);
-            }
-
+        if parse_and_store_metadata(line_str_trimmed, &mut raw_metadata) {
             continue;
         }
 
@@ -126,62 +111,56 @@ pub fn parse_lrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
     let mut final_lyric_lines: Vec<LyricLine> = Vec::new();
     let mut i = 0;
     while i < temp_entries.len() {
+        if temp_entries[i].text.is_empty() {
+            i += 1;
+            continue;
+        }
+
         let current_main_entry = &temp_entries[i];
         let mut current_translations = Vec::new();
 
         // 检查是否有紧随其后且时间戳相同的行，作为翻译
-        let mut translation_lines_count = 0;
-        while let Some(next_entry) = temp_entries.get(i + 1 + translation_lines_count) {
+        let mut next_event_index = i + 1;
+        while let Some(next_entry) = temp_entries.get(next_event_index) {
             if next_entry.timestamp_ms == current_main_entry.timestamp_ms {
-                current_translations.push(TranslationEntry {
-                    text: next_entry.text.clone(),
-                    lang: None,
-                });
-                translation_lines_count += 1;
+                if !next_entry.text.is_empty() {
+                    current_translations.push(TranslationEntry {
+                        text: next_entry.text.clone(),
+                        lang: None,
+                    });
+                }
+                next_event_index += 1;
             } else {
                 break;
             }
         }
 
         let start_ms = current_main_entry.timestamp_ms;
+
+        let end_ms = if let Some(next_event) = temp_entries.get(next_event_index) {
+            next_event.timestamp_ms.max(start_ms + 1)
+        } else {
+            start_ms + DEFAULT_LAST_LINE_DURATION_MS
+        };
+
+        let duration = end_ms.saturating_sub(start_ms);
+
         final_lyric_lines.push(LyricLine {
             start_ms,
-            end_ms: 0, // 结束时间将在下一步中计算
+            end_ms,
             line_text: Some(current_main_entry.text.clone()),
             main_syllables: vec![LyricSyllable {
                 text: current_main_entry.text.clone(),
                 start_ms,
-                end_ms: 0, // 同样将在下一步计算
-                duration_ms: None,
+                end_ms,
+                duration_ms: Some(duration),
                 ..Default::default()
             }],
             translations: current_translations,
-            ..Default::default() // 其他字段使用默认值
+            ..Default::default()
         });
 
-        i += 1 + translation_lines_count; // 跳过主歌词行和所有已处理的翻译行
-    }
-
-    // 再次遍历，以确定每行的结束时间
-    if !final_lyric_lines.is_empty() {
-        let num_lines = final_lyric_lines.len();
-        for idx in 0..num_lines {
-            let current_start_ms = final_lyric_lines[idx].start_ms;
-            // 结束时间是下一行的开始时间，或者是最后一个的默认时长
-            let end_ms = if idx + 1 < num_lines {
-                final_lyric_lines[idx + 1]
-                    .start_ms
-                    .max(current_start_ms + 1)
-            } else {
-                current_start_ms + 10000
-            };
-
-            final_lyric_lines[idx].end_ms = end_ms;
-            if let Some(syllable) = final_lyric_lines[idx].main_syllables.first_mut() {
-                syllable.end_ms = end_ms;
-                syllable.duration_ms = Some(end_ms.saturating_sub(current_start_ms));
-            }
-        }
+        i = next_event_index;
     }
 
     Ok(ParsedSourceData {
@@ -192,4 +171,131 @@ pub fn parse_lrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
         warnings,
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_simple_lrc() {
+        let content = r#"
+        [00:10.00]Line 1
+        [00:12.50]Line 2
+        "#;
+        let parsed_data = parse_lrc(content).unwrap();
+        assert_eq!(parsed_data.lines.len(), 2);
+
+        let line1 = &parsed_data.lines[0];
+        assert_eq!(line1.start_ms, 10000);
+        assert_eq!(line1.end_ms, 12500);
+        assert_eq!(line1.line_text.as_deref(), Some("Line 1"));
+
+        let line2 = &parsed_data.lines[1];
+        assert_eq!(line2.start_ms, 12500);
+        assert_eq!(line2.end_ms, 12500 + DEFAULT_LAST_LINE_DURATION_MS);
+        assert_eq!(line2.line_text.as_deref(), Some("Line 2"));
+    }
+
+    #[test]
+    fn test_lrc_handles_pause_line() {
+        let content = r#"
+        [01:31.460]第一行
+        [01:35.840]
+        [01:54.660]第二行
+        "#;
+        let parsed_data = parse_lrc(content).unwrap();
+
+        assert_eq!(parsed_data.lines.len(), 2, "应只生成2行有效歌词");
+
+        let line1 = &parsed_data.lines[0];
+        assert_eq!(line1.start_ms, 91460);
+        assert_eq!(line1.end_ms, 95840, "结束时间应是空行的时间戳");
+        assert_eq!(line1.line_text.as_deref(), Some("第一行"));
+
+        let line2 = &parsed_data.lines[1];
+        assert_eq!(line2.start_ms, 114660);
+    }
+
+    #[test]
+    fn test_bilingual_lrc_parsing() {
+        let content = r#"
+        [00:20.00]Hello world
+        [00:20.00]你好世界
+        [00:22.00]Next line
+        "#;
+        let parsed_data = parse_lrc(content).unwrap();
+
+        assert_eq!(parsed_data.lines.len(), 2, "相同时间戳的行应被合并");
+
+        let line1 = &parsed_data.lines[0];
+        assert_eq!(line1.start_ms, 20000);
+        assert_eq!(line1.line_text.as_deref(), Some("Hello world"));
+        assert_eq!(line1.translations.len(), 1, "应有1行翻译");
+        assert_eq!(line1.translations[0].text, "你好世界");
+
+        let line2 = &parsed_data.lines[1];
+        assert_eq!(line2.start_ms, 22000);
+    }
+
+    #[test]
+    fn test_out_of_order_and_multi_timestamp_lrc() {
+        let content = r#"
+        [00:30.00]Chorus line
+        [00:10.00][00:50.00]Verse line
+        [00:20.00]Another line
+        "#;
+        let parsed_data = parse_lrc(content).unwrap();
+
+        assert_eq!(parsed_data.lines.len(), 4);
+
+        assert_eq!(parsed_data.lines[0].start_ms, 10000);
+        assert_eq!(
+            parsed_data.lines[0].line_text.as_deref(),
+            Some("Verse line")
+        );
+
+        assert_eq!(parsed_data.lines[1].start_ms, 20000);
+        assert_eq!(
+            parsed_data.lines[1].line_text.as_deref(),
+            Some("Another line")
+        );
+
+        assert_eq!(parsed_data.lines[2].start_ms, 30000);
+        assert_eq!(
+            parsed_data.lines[2].line_text.as_deref(),
+            Some("Chorus line")
+        );
+
+        assert_eq!(parsed_data.lines[3].start_ms, 50000);
+        assert_eq!(
+            parsed_data.lines[3].line_text.as_deref(),
+            Some("Verse line")
+        );
+    }
+
+    #[test]
+    fn test_whitespace_normalization_and_metadata() {
+        let content = r#"
+        [ti:  My Song Title  ]
+        [ar:The Artist   ]
+        [00:05.123]   leading and trailing spaces
+        [00:08.45]multiple   internal    spaces
+        "#;
+        let parsed_data = parse_lrc(content).unwrap();
+
+        assert_eq!(
+            parsed_data.raw_metadata.get("ti").unwrap()[0],
+            "My Song Title"
+        );
+        assert_eq!(parsed_data.raw_metadata.get("ar").unwrap()[0], "The Artist");
+
+        assert_eq!(
+            parsed_data.lines[0].line_text.as_deref(),
+            Some("leading and trailing spaces")
+        );
+        assert_eq!(
+            parsed_data.lines[1].line_text.as_deref(),
+            Some("multiple internal spaces")
+        );
+    }
 }

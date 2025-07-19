@@ -9,7 +9,7 @@ use crate::converter::{
     types::{
         BackgroundSection, ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData,
     },
-    utils::parse_lrc_metadata_tag,
+    utils::parse_and_store_metadata,
 };
 
 /// 匹配 QRC 行级时间戳 `[start,duration]`
@@ -151,7 +151,7 @@ pub fn parse_qrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
         }
 
         // 解析元数据
-        if parse_lrc_metadata_tag(trimmed_line, &mut raw_metadata) {
+        if parse_and_store_metadata(trimmed_line, &mut raw_metadata) {
             continue;
         }
 
