@@ -3,18 +3,16 @@
 //! 该解析器设计上仅用于解析 Apple Music 和 AMLL 使用的 TTML 歌词文件，
 //! 不建议用于解析通用的 TTML 字幕文件。
 
-use std::{
-    collections::{HashMap, HashSet},
-    str,
-    sync::OnceLock,
-};
+use std::{collections::HashMap, str, sync::OnceLock};
 
 use quick_xml::{
     Reader,
+    de::from_str,
     errors::Error as QuickXmlError,
-    events::{BytesEnd, BytesStart, BytesText, Event, attributes::Attribute},
+    events::{BytesStart, BytesText, Event, attributes::Attribute},
 };
 use regex::Regex;
+use serde::Deserialize;
 use tracing::{error, warn};
 
 use crate::converter::{
@@ -36,15 +34,6 @@ const TAG_DIV: &[u8] = b"div";
 const TAG_P: &[u8] = b"p";
 const TAG_SPAN: &[u8] = b"span";
 const TAG_BR: &[u8] = b"br";
-const TAG_META: &[u8] = b"meta";
-const TAG_ITUNES_METADATA: &[u8] = b"iTunesMetadata";
-const TAG_TRANSLATIONS: &[u8] = b"translations";
-const TAG_TRANSLATION: &[u8] = b"translation";
-const TAG_TEXT: &[u8] = b"text";
-const TAG_SONGWRITERS: &[u8] = b"songwriters";
-const TAG_SONGWRITER: &[u8] = b"songwriter";
-const TAG_AGENT: &[u8] = b"agent";
-const TAG_NAME: &[u8] = b"name";
 
 const ATTR_ITUNES_TIMING: &[u8] = b"itunes:timing";
 const ATTR_XML_LANG: &[u8] = b"xml:lang";
@@ -56,11 +45,6 @@ const ATTR_AGENT_ALIAS: &[u8] = b"agent";
 const ATTR_ITUNES_KEY: &[u8] = b"itunes:key";
 const ATTR_ROLE: &[u8] = b"ttm:role";
 const ATTR_ROLE_ALIAS: &[u8] = b"role";
-const ATTR_KEY: &[u8] = b"key";
-const ATTR_VALUE: &[u8] = b"value";
-const ATTR_FOR: &[u8] = b"for";
-const ATTR_XML_ID: &[u8] = b"xml:id";
-const ATTR_TYPE: &[u8] = b"type";
 const ATTR_XML_SCHEME: &[u8] = b"xml:scheme";
 
 const ROLE_TRANSLATION: &[u8] = b"x-translation";
@@ -68,7 +52,7 @@ const ROLE_ROMANIZATION: &[u8] = b"x-roman";
 const ROLE_BACKGROUND: &[u8] = b"x-bg";
 
 // =================================================================================
-// 2. 解析器状态结构体
+// 2. 状态机和元数据结构体
 // =================================================================================
 
 /// 主解析器状态机，聚合了所有子状态和全局配置。
@@ -87,14 +71,10 @@ struct TtmlParserState {
     default_translation_lang: Option<String>,
     /// 默认的罗马音语言。
     default_romanization_lang: Option<String>,
-    /// 用于存储和检查 `xml:id` 的唯一性，防止重复。
-    xml_ids: HashSet<String>,
     /// 通用文本缓冲区，用于临时存储标签内的文本内容。
     text_buffer: String,
 
     // --- 子状态机 ---
-    /// 标记当前解析位置是否在 `<metadata>` 标签内。
-    in_metadata_section: bool,
     /// 存储 `<metadata>` 区域解析状态的结构体。
     metadata_state: MetadataParseState,
     /// 存储 `<body>` 和 `<p>` 区域解析状态的结构体。
@@ -104,26 +84,8 @@ struct TtmlParserState {
 /// 存储 `<metadata>` 区域解析状态的结构体。
 #[derive(Debug, Default)]
 struct MetadataParseState {
-    // --- Apple Music 特定元数据状态 ---
-    in_itunes_metadata: bool,
-    in_am_translations: bool, // AM = Apple Music
-    in_am_translation: bool,
-    current_am_translation_lang: Option<String>,
     /// 存储从 `<iTunesMetadata>` 解析出的翻译，key 是 itunes:key。
     translation_map: HashMap<String, (String, Option<String>)>,
-    in_songwriters_tag: bool,
-    in_songwriter_tag: bool,
-    current_songwriter_name: String,
-
-    // --- ttm:agent (演唱者) 相关状态 ---
-    in_agent_tag: bool,
-    in_agent_name_tag: bool,
-    current_agent_id_for_name: Option<String>,
-    current_agent_name_text: String,
-
-    // --- 通用 ttm: 命名空间元数据状态 ---
-    in_ttm_metadata_tag: bool,
-    current_ttm_metadata_key: Option<String>,
 }
 
 /// 存储 `<body>` 和 `<p>` 区域解析状态的结构体。
@@ -207,6 +169,66 @@ enum LastSyllableInfo {
     },
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct Metadata {
+    #[serde(rename = "meta", alias = "amll:meta", default)]
+    metas: Vec<MetaTag>,
+    #[serde(rename = "agent", alias = "ttm:agent", default)]
+    agents: Vec<Agent>,
+    #[serde(rename = "iTunesMetadata", default)]
+    itunes_metadata: Option<ItunesMetadata>,
+    #[serde(flatten)]
+    other_metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct MetaTag {
+    #[serde(rename = "@key")]
+    key: String,
+    #[serde(rename = "@value")]
+    value: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct Agent {
+    #[serde(rename = "@xml:id")]
+    id: String,
+    #[serde(rename = "@type", default)]
+    agent_type: String,
+    #[serde(rename = "name", alias = "ttm:name", default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ItunesMetadata {
+    #[serde(default)]
+    songwriters: Songwriters,
+    #[serde(default)]
+    translations: Vec<ItunesTranslation>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct Songwriters {
+    #[serde(rename = "songwriter", default)]
+    list: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ItunesTranslation {
+    #[serde(rename = "@xml:lang")]
+    lang: Option<String>,
+    #[serde(rename = "text", default)]
+    texts: Vec<ItunesTranslationText>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ItunesTranslationText {
+    #[serde(rename = "@for")]
+    key: String,
+    #[serde(rename = "$text")]
+    text: String,
+}
+
 // =================================================================================
 // 3. 公共 API
 // =================================================================================
@@ -284,54 +306,78 @@ pub fn parse_ttml(
     let mut buf = Vec::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            // 到达文件末尾，跳出循环
-            Ok(Event::Eof) => break,
-            Ok(event) => {
-                // 根据当前上下文（状态），将事件分发给不同的处理器
-                if state.body_state.in_p {
-                    handle_p_event(&event, &mut state, &reader, &mut lines, &mut warnings)?;
-                } else if state.in_metadata_section {
-                    handle_metadata_event(
-                        &event,
-                        &mut state,
-                        &mut reader,
-                        &mut raw_metadata,
-                        &mut warnings,
-                    )?;
-                } else {
-                    handle_global_event(
-                        &event,
-                        &mut state,
-                        &reader,
-                        &mut raw_metadata,
-                        &mut warnings,
-                        has_timed_span_tags,
-                    )?;
-                }
-            }
-            Err(e) => match e {
+        let event_start_pos = reader.buffer_position();
+
+        let event = match reader.read_event_into(&mut buf) {
+            Ok(event) => event,
+            Err(e) => {
                 // 格式错误，尝试继续，但状态机状态可能已经错乱
                 // TODO: 加入数据恢复逻辑
-                QuickXmlError::IllFormed(ill_formed_err) => {
-                    warnings.push(format!(
-                        "TTML 格式错误，位置 {}: {}。",
-                        reader.error_position(),
-                        ill_formed_err
-                    ));
+                match e {
+                    QuickXmlError::IllFormed(ill_formed_err) => {
+                        warnings.push(format!(
+                            "TTML 格式错误，位置 {}: {}。",
+                            reader.error_position(),
+                            ill_formed_err
+                        ));
+                        continue;
+                    }
+                    // 无法恢复的 IO 错误等
+                    _ => {
+                        error!(
+                            "TTML 解析错误，位置 {}: {}。无法继续解析",
+                            reader.error_position(),
+                            e
+                        );
+                        return Err(ConvertError::Xml(e));
+                    }
                 }
-                // 无法恢复的 IO 错误等
-                _ => {
-                    error!(
-                        "TTML 解析错误，位置 {}: {}。无法继续解析",
-                        reader.error_position(),
-                        e
-                    );
-                    return Err(ConvertError::Xml(e));
+            }
+        };
+
+        if let Event::Start(e) = &event {
+            if e.local_name().as_ref() == TAG_METADATA {
+                reader.read_to_end(e.name())?;
+                let end_pos = reader.buffer_position();
+                let metadata_slice = &content[event_start_pos as usize..end_pos as usize];
+
+                match from_str::<Metadata>(metadata_slice) {
+                    Ok(metadata_struct) => {
+                        process_deserialized_metadata(
+                            metadata_struct,
+                            &mut state,
+                            &mut raw_metadata,
+                        );
+                    }
+                    Err(de_error) => {
+                        warnings.push(format!("解析 metadata 标签失败: {}", de_error));
+                    }
                 }
-            },
+                buf.clear();
+                continue;
+            }
         }
-        buf.clear(); // 清空缓冲区为下一次读取做准备
+
+        if state.body_state.in_p {
+            if let Event::Eof = event {
+                break;
+            }
+            handle_p_event(&event, &mut state, &reader, &mut lines, &mut warnings)?;
+        } else {
+            if let Event::Eof = event {
+                break;
+            }
+            handle_global_event(
+                &event,
+                &mut state,
+                &reader,
+                &mut raw_metadata,
+                &mut warnings,
+                has_timed_span_tags,
+            )?;
+        }
+
+        buf.clear();
     }
 
     Ok(ParsedSourceData {
@@ -370,7 +416,6 @@ fn handle_global_event<'a>(
                 has_timed_span_tags,
                 warnings,
             )?,
-            TAG_METADATA => state.in_metadata_section = true,
             TAG_BODY => state.body_state.in_body = true,
             TAG_DIV if state.body_state.in_body => {
                 state.body_state.in_div = true;
@@ -414,16 +459,15 @@ fn handle_global_event<'a>(
                     .transpose()?;
 
                 // 创建 p 元素数据容器
-                let p_data = CurrentPElementData {
+                state.body_state.current_p_element_data = Some(CurrentPElementData {
                     start_ms,
                     end_ms,
                     agent,
                     song_part,
                     itunes_key,
                     ..Default::default()
-                };
+                });
 
-                state.body_state.current_p_element_data = Some(p_data);
                 // 重置 p 内部的状态
                 state.text_buffer.clear();
                 state.body_state.span_stack.clear();
@@ -435,52 +479,8 @@ fn handle_global_event<'a>(
                 state.body_state.in_div = false;
                 state.body_state.current_div_song_part = None; // 离开 div 时清除
             }
-            TAG_METADATA => state.in_metadata_section = false,
             _ => {}
         },
-        _ => {}
-    }
-    Ok(())
-}
-
-/// 处理在 `<metadata>` 区域内的事件。
-/// 这是一个分发器，将事件进一步传递给更具体的处理函数。
-fn handle_metadata_event<'a>(
-    event: &Event<'a>,
-    state: &mut TtmlParserState,
-    reader: &mut Reader<&[u8]>,
-    raw_metadata: &mut HashMap<String, Vec<String>>,
-    warnings: &mut Vec<String>,
-) -> Result<(), ConvertError> {
-    match event {
-        Event::Start(e) => handle_metadata_start_event(
-            e,
-            &mut state.metadata_state,
-            &mut state.xml_ids,
-            &mut state.text_buffer,
-            reader,
-            raw_metadata,
-            warnings,
-        )?,
-        Event::Empty(e) => {
-            // 处理自闭合标签如 <meta ... />
-            handle_metadata_empty_event(e, &mut state.xml_ids, reader, raw_metadata, warnings)?
-        }
-        Event::Text(e) => {
-            handle_metadata_text_event(e, &mut state.metadata_state, &mut state.text_buffer)?
-        }
-        Event::End(e) => {
-            if e.local_name().as_ref() == TAG_METADATA {
-                state.in_metadata_section = false;
-            } else {
-                handle_metadata_end_event(
-                    e,
-                    &mut state.metadata_state,
-                    &mut state.text_buffer,
-                    raw_metadata,
-                )?;
-            }
-        }
         _ => {}
     }
     Ok(())
@@ -585,191 +585,6 @@ fn handle_p_event<'a>(
 // 5. XML 元素与事件处理器
 // =================================================================================
 
-/// 用于处理 `<ttm:agent>` 的辅助函数。
-fn process_agent_tag(
-    e: &BytesStart,
-    xml_ids: &mut HashSet<String>,
-    reader: &Reader<&[u8]>,
-    raw_metadata: &mut HashMap<String, Vec<String>>,
-    warnings: &mut Vec<String>,
-) -> Result<Option<String>, ConvertError> {
-    // 获取 xml:id 和 type 属性
-    let agent_id = e
-        .try_get_attribute(ATTR_XML_ID)?
-        .map(|a| attr_value_as_string(&a, reader))
-        .transpose()?;
-
-    if let Some(id_val) = &agent_id {
-        check_and_store_xml_id(id_val, xml_ids, warnings);
-
-        let agent_type = e
-            .try_get_attribute(ATTR_TYPE)?
-            .map(|a| attr_value_as_string(&a, reader))
-            .transpose()?
-            .unwrap_or_else(|| "person".to_string());
-
-        raw_metadata
-            .entry(format!("agent-type-{id_val}"))
-            .or_default()
-            .push(agent_type);
-    }
-
-    Ok(agent_id)
-}
-
-fn handle_metadata_start_event<'a>(
-    e: &BytesStart<'a>,
-    state: &mut MetadataParseState,
-    xml_ids: &mut HashSet<String>,
-    text_buffer: &mut String,
-    reader: &mut Reader<&[u8]>,
-    raw_metadata: &mut HashMap<String, Vec<String>>,
-    warnings: &mut Vec<String>,
-) -> Result<(), ConvertError> {
-    let local_name_str = get_local_name_str(e.local_name())?;
-    match e.local_name().as_ref() {
-        TAG_META => process_meta_tag(e, reader, raw_metadata)?,
-        TAG_ITUNES_METADATA => state.in_itunes_metadata = true,
-        TAG_TRANSLATIONS if state.in_itunes_metadata => state.in_am_translations = true,
-        TAG_TRANSLATION if state.in_am_translations => {
-            state.in_am_translation = true;
-            // 获取 xml:lang
-            state.current_am_translation_lang = e
-                .try_get_attribute(ATTR_XML_LANG)?
-                .map(|attr| attr_value_as_string(&attr, reader))
-                .transpose()?;
-        }
-        TAG_TEXT if state.in_am_translation => {
-            // 获取 for 属性
-            if let Some(attr) = e.try_get_attribute(ATTR_FOR)? {
-                let key = attr_value_as_string(&attr, reader)?;
-                let text_content = reader.read_text(e.name())?;
-                if !text_content.is_empty() {
-                    state.translation_map.insert(
-                        key,
-                        (
-                            text_content.to_string(),
-                            state.current_am_translation_lang.clone(),
-                        ),
-                    );
-                }
-            }
-        }
-        TAG_SONGWRITERS if state.in_itunes_metadata => state.in_songwriters_tag = true,
-        TAG_SONGWRITER if state.in_songwriters_tag => {
-            state.in_songwriter_tag = true;
-            state.current_songwriter_name.clear();
-        }
-        TAG_AGENT if e.name().as_ref().starts_with(b"ttm:") => {
-            if let Some(agent_id) = process_agent_tag(e, xml_ids, reader, raw_metadata, warnings)? {
-                state.in_agent_tag = true;
-                state.current_agent_id_for_name = Some(agent_id);
-            }
-        }
-        TAG_NAME if state.in_agent_tag && e.name().as_ref().starts_with(b"ttm:") => {
-            state.in_agent_name_tag = true;
-            state.current_agent_name_text.clear();
-        }
-        _ if e.name().as_ref().starts_with(b"ttm:") => {
-            // 通用 ttm:* 元数据处理
-            state.in_ttm_metadata_tag = true;
-            state.current_ttm_metadata_key = Some(local_name_str);
-            text_buffer.clear();
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn handle_metadata_empty_event<'a>(
-    e: &BytesStart<'a>,
-    xml_ids: &mut HashSet<String>,
-    reader: &Reader<&[u8]>,
-    raw_metadata: &mut HashMap<String, Vec<String>>,
-    warnings: &mut Vec<String>,
-) -> Result<(), ConvertError> {
-    match e.local_name().as_ref() {
-        TAG_META => process_meta_tag(e, reader, raw_metadata)?,
-        TAG_AGENT if e.name().as_ref().starts_with(b"ttm:") => {
-            process_agent_tag(e, xml_ids, reader, raw_metadata, warnings)?;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn handle_metadata_text_event(
-    e: &BytesText,
-    state: &mut MetadataParseState,
-    text_buffer: &mut String,
-) -> Result<(), ConvertError> {
-    let text_val = e.decode()?;
-    if state.in_songwriter_tag {
-        state.current_songwriter_name.push_str(&text_val);
-    } else if state.in_agent_name_tag {
-        state.current_agent_name_text.push_str(&text_val);
-    } else if state.in_ttm_metadata_tag {
-        text_buffer.push_str(&text_val);
-    }
-    Ok(())
-}
-
-fn handle_metadata_end_event(
-    e: &BytesEnd,
-    state: &mut MetadataParseState,
-    text_buffer: &mut String,
-    raw_metadata: &mut HashMap<String, Vec<String>>,
-) -> Result<(), ConvertError> {
-    let ended_tag_name = get_local_name_str(e.local_name())?;
-    match ended_tag_name.as_bytes() {
-        TAG_ITUNES_METADATA => state.in_itunes_metadata = false,
-        TAG_TRANSLATIONS => state.in_am_translations = false,
-        TAG_TRANSLATION => state.in_am_translation = false,
-        TAG_SONGWRITER => {
-            if !state.current_songwriter_name.is_empty() {
-                raw_metadata
-                    .entry("songwriters".to_string())
-                    .or_default()
-                    .push(state.current_songwriter_name.trim().to_string());
-            }
-            state.in_songwriter_tag = false;
-        }
-        TAG_SONGWRITERS => state.in_songwriters_tag = false,
-        TAG_NAME if state.in_agent_name_tag && e.name().as_ref().starts_with(b"ttm:") => {
-            if let Some(agent_id) = &state.current_agent_id_for_name {
-                let agent_display_name = state.current_agent_name_text.trim().to_string();
-                if !agent_display_name.is_empty() {
-                    raw_metadata
-                        .entry("agent".to_string())
-                        .or_default()
-                        .push(format!("{agent_id}={agent_display_name}"));
-                }
-            }
-            state.in_agent_name_tag = false;
-        }
-        TAG_AGENT if state.in_agent_tag && e.name().as_ref().starts_with(b"ttm:") => {
-            state.in_agent_tag = false;
-            state.current_agent_id_for_name = None;
-        }
-        _ => {
-            // 通用 ttm:* 元数据结束标签处理
-            if state.in_ttm_metadata_tag
-                && let Some(key) = state.current_ttm_metadata_key.as_ref()
-                && *key == ended_tag_name
-            {
-                let value = normalize_text_whitespace(text_buffer);
-                if !value.is_empty() {
-                    raw_metadata.entry(key.clone()).or_default().push(value);
-                }
-                state.in_ttm_metadata_tag = false;
-                state.current_ttm_metadata_key = None;
-                text_buffer.clear();
-            }
-        }
-    }
-    Ok(())
-}
-
 /// 处理 `<tt>` 标签的开始事件，这是文档的根元素。
 /// 主要任务是确定计时模式（逐行 vs 逐字）和文档的默认语言。
 fn process_tt_start(
@@ -806,27 +621,6 @@ fn process_tt_start(
             if state.default_main_lang.is_none() {
                 state.default_main_lang = Some(lang_val);
             }
-        }
-    }
-
-    Ok(())
-}
-
-/// 处理 `<meta>` 标签，提取 key-value 形式的元数据。
-fn process_meta_tag(
-    e: &BytesStart,
-    reader: &Reader<&[u8]>,
-    raw_metadata: &mut HashMap<String, Vec<String>>,
-) -> Result<(), ConvertError> {
-    // 获取 key 和 value 属性
-    let key_attr = e.try_get_attribute(ATTR_KEY)?;
-    let value_attr = e.try_get_attribute(ATTR_VALUE)?;
-
-    if let (Some(k_attr), Some(v_attr)) = (key_attr, value_attr) {
-        let k = attr_value_as_string(&k_attr, reader)?;
-        let v = attr_value_as_string(&v_attr, reader)?;
-        if !k.is_empty() {
-            raw_metadata.entry(k).or_default().push(v);
         }
     }
 
@@ -1583,13 +1377,6 @@ fn clean_parentheses_from_bg_text(text: &str) -> String {
         .to_string()
 }
 
-/// 从 XML 事件的字节切片中获取本地标签名字符串。
-fn get_local_name_str(name_bytes: impl AsRef<[u8]>) -> Result<String, ConvertError> {
-    str::from_utf8(name_bytes.as_ref())
-        .map(|s| s.to_string())
-        .map_err(|err| ConvertError::Internal(format!("无法将标签名转换为UTF-8: {err}")))
-}
-
 /// 将 XML 属性值（可能包含实体引用如 `&amp;`）解码为字符串。
 fn attr_value_as_string(attr: &Attribute, reader: &Reader<&[u8]>) -> Result<String, ConvertError> {
     Ok(attr
@@ -1597,10 +1384,55 @@ fn attr_value_as_string(attr: &Attribute, reader: &Reader<&[u8]>) -> Result<Stri
         .into_owned())
 }
 
-/// 检查 xml:id 的唯一性，如果重复则记录一个警告。
-fn check_and_store_xml_id(id_str: &str, xml_ids: &mut HashSet<String>, warnings: &mut Vec<String>) {
-    if !id_str.is_empty() && !xml_ids.insert(id_str.to_string()) {
-        warnings.push(format!("检测到重复的 xml:id '{id_str}'。"));
+/// 辅助函数：处理从 serde 解析出的元数据
+fn process_deserialized_metadata(
+    metadata: Metadata,
+    state: &mut TtmlParserState,
+    raw_metadata: &mut HashMap<String, Vec<String>>,
+) {
+    for meta in metadata.metas {
+        raw_metadata.entry(meta.key).or_default().push(meta.value);
+    }
+
+    for agent in metadata.agents {
+        let agent_display = match agent.name {
+            Some(name) if !name.is_empty() => format!("{}={}", agent.id, name),
+            _ => agent.id.clone(),
+        };
+        raw_metadata
+            .entry("agent".to_string())
+            .or_default()
+            .push(agent_display);
+
+        if !agent.agent_type.is_empty() {
+            let type_key = format!("agent-type-{}", agent.id);
+            raw_metadata
+                .entry(type_key)
+                .or_default()
+                .push(agent.agent_type);
+        }
+    }
+
+    if let Some(itunes) = metadata.itunes_metadata {
+        if !itunes.songwriters.list.is_empty() {
+            raw_metadata.insert("songwriters".to_string(), itunes.songwriters.list);
+        }
+
+        for trans in itunes.translations {
+            for text_entry in trans.texts {
+                state
+                    .metadata_state
+                    .translation_map
+                    .insert(text_entry.key, (text_entry.text, trans.lang.clone()));
+            }
+        }
+    }
+
+    for (key, value) in metadata.other_metadata {
+        let normalized_value = normalize_text_whitespace(&value);
+        if !normalized_value.is_empty() {
+            raw_metadata.entry(key).or_default().push(normalized_value);
+        }
     }
 }
 
