@@ -104,6 +104,15 @@ pub fn process_syllable_text(
     }
 }
 
+/// 规范化文本中的空白字符
+pub fn normalize_text_whitespace(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

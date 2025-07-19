@@ -5,8 +5,11 @@ use std::collections::HashMap;
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::converter::types::{
-    ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData, TranslationEntry,
+use crate::converter::{
+    types::{
+        ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData, TranslationEntry,
+    },
+    utils::normalize_text_whitespace,
 };
 
 /// 用于匹配一个完整的 LRC 歌词行，捕获时间戳部分和文本部分
@@ -52,22 +55,22 @@ pub fn parse_lrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                 .map_or("", |m| m.as_str())
                 .trim()
                 .to_string();
-            let value = meta_caps
-                .get(2)
-                .map_or("", |m| m.as_str())
-                .trim()
-                .to_string();
+            let value = meta_caps.get(2).map_or("", |m| m.as_str());
+            let normalized_value = normalize_text_whitespace(value);
 
             if !key.is_empty() {
-                raw_metadata.entry(key).or_default().push(value);
+                raw_metadata.entry(key).or_default().push(normalized_value);
             }
+
             continue;
         }
 
         // 解析歌词行
         if let Some(line_caps) = LRC_LINE_REGEX.captures(line_str_trimmed) {
             let all_timestamps_str = line_caps.get(1).map_or("", |m| m.as_str());
-            let text_part = line_caps.get(2).map_or("", |m| m.as_str()).to_string();
+
+            let raw_text_part = line_caps.get(2).map_or("", |m| m.as_str());
+            let text_part = normalize_text_whitespace(raw_text_part);
 
             for ts_cap in LRC_TIMESTAMP_EXTRACT_REGEX.captures_iter(all_timestamps_str) {
                 let minutes_str = ts_cap.get(1).map_or("0", |m| m.as_str());

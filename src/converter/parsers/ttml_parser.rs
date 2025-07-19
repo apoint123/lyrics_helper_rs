@@ -21,6 +21,7 @@ use crate::converter::{
         BackgroundSection, ConvertError, DefaultLanguageOptions, LyricLine, LyricSyllable,
         ParsedSourceData, RomanizationEntry, TranslationEntry,
     },
+    utils::normalize_text_whitespace,
 };
 
 // =================================================================================
@@ -1357,15 +1358,6 @@ fn parse_ttml_time_to_ms(time_str: &str) -> Result<u64, ConvertError> {
 
         Ok(total_ms)
     }
-}
-
-/// 规范化文本中的空白字符
-pub fn normalize_text_whitespace(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    trimmed.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
 
 /// 清理文本两端的括号（单个或成对）

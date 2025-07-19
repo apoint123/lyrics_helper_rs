@@ -5,8 +5,9 @@ use std::collections::HashMap;
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::converter::types::{
-    ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData,
+use crate::converter::{
+    types::{ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData},
+    utils::normalize_text_whitespace,
 };
 
 /// 匹配 Lyricify Lines 的行格式 `[start,end]Text`
@@ -33,7 +34,13 @@ pub fn parse_lyl(content: &str) -> Result<ParsedSourceData, ConvertError> {
             // 从捕获组中提取时间戳和文本
             let start_ms_str = &caps[1];
             let end_ms_str = &caps[2];
-            let text = caps[3].trim().to_string();
+
+            let raw_text = caps.get(3).map_or("", |m| m.as_str());
+            let text = normalize_text_whitespace(raw_text);
+
+            if text.is_empty() {
+                continue;
+            }
 
             let start_ms: u64 = start_ms_str.parse().map_err(ConvertError::ParseInt)?;
             let end_ms: u64 = end_ms_str.parse().map_err(ConvertError::ParseInt)?;

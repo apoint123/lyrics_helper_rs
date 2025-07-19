@@ -12,12 +12,12 @@ use quick_xml::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::converter::{
-    parsers::ttml_parser::normalize_text_whitespace,
     processors::metadata_processor::MetadataStore,
     types::{
         BackgroundSection, CanonicalMetadataKey, ConvertError, LyricLine, LyricSyllable,
         RomanizationEntry, TranslationEntry, TtmlGenerationOptions, TtmlTimingMode,
     },
+    utils::normalize_text_whitespace,
 };
 
 /// 将毫秒时间戳格式化为 TTML 标准的时间字符串。

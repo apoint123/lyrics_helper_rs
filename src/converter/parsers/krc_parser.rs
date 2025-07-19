@@ -9,9 +9,10 @@ use std::sync::LazyLock;
 
 use crate::converter::{
     types::{
-        ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData, TranslationEntry,
+        ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData, RomanizationEntry,
+        TranslationEntry,
     },
-    utils::{parse_lrc_metadata_tag, process_syllable_text},
+    utils::{normalize_text_whitespace, parse_lrc_metadata_tag, process_syllable_text},
 };
 
 /// 匹配 KRC 行级时间戳 `[start,duration]`
@@ -38,7 +39,9 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
     let mut raw_metadata: HashMap<String, Vec<String>> = HashMap::new();
     let mut warnings: Vec<String> = Vec::new();
 
-    let translations = extract_translation_from_krc(content)?;
+    let aux_data = extract_auxiliary_data_from_krc(content)?;
+
+    let mut aux_line_index = 0;
 
     for (i, line_str) in content.lines().enumerate() {
         let line_num = i + 1;
@@ -95,19 +98,28 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
             }
 
             if !syllables.is_empty() {
-                let translation_text: Option<String> = translations
-                    .as_ref()
-                    .and_then(|t| t.get(lines.len()).cloned());
-
-                let translation_entries: Vec<TranslationEntry> =
-                    if let Some(text) = translation_text {
-                        vec![TranslationEntry {
-                            text,
+                let mut translation_entries: Vec<TranslationEntry> = Vec::new();
+                if let Some(raw_text) = aux_data.translations.get(aux_line_index) {
+                    let normalized_text = normalize_text_whitespace(raw_text);
+                    if !normalized_text.is_empty() {
+                        translation_entries.push(TranslationEntry {
+                            text: normalized_text,
                             lang: Some("zh-Hans".to_string()),
-                        }]
-                    } else {
-                        Vec::new()
-                    };
+                        });
+                    }
+                }
+
+                let mut romanization_entries: Vec<RomanizationEntry> = Vec::new();
+                if let Some(raw_text) = aux_data.romanizations.get(aux_line_index) {
+                    let normalized_text = normalize_text_whitespace(raw_text);
+                    if !normalized_text.is_empty() {
+                        romanization_entries.push(RomanizationEntry {
+                            text: normalized_text,
+                            lang: Some("ja-Latn".to_string()),
+                            scheme: None,
+                        });
+                    }
+                }
 
                 let full_line_text = syllables
                     .iter()
@@ -127,10 +139,13 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                     end_ms: line_start_ms + line_duration_ms,
                     line_text: Some(full_line_text),
                     translations: translation_entries,
+                    romanizations: romanization_entries,
                     main_syllables: syllables,
                     agent: Some("v1".to_string()),
                     ..Default::default()
                 });
+
+                aux_line_index += 1;
             } else {
                 warnings.push(format!("第 {line_num} 行: 未找到任何有效的音节。"));
             }
@@ -149,19 +164,29 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
     })
 }
 
-#[derive(Deserialize)]
-struct TranslationJson {
-    content: Vec<ContentEntry>,
+#[derive(Default, Debug)]
+struct KrcAuxiliaryData {
+    translations: Vec<String>,
+    romanizations: Vec<String>,
 }
 
 #[derive(Deserialize)]
-struct ContentEntry {
+struct KrcJson {
+    content: Vec<KrcContentEntry>,
+}
+
+#[derive(Deserialize)]
+struct KrcContentEntry {
     #[serde(rename = "lyricContent")]
     lyric_content: Vec<Vec<String>>,
+    #[serde(rename = "type")]
+    content_type: u8,
 }
 
-/// 从 KRC 内容中提取并解析内嵌的翻译。
-pub fn extract_translation_from_krc(content: &str) -> Result<Option<Vec<String>>, ConvertError> {
+/// 从 KRC 内容中提取辅助内容。
+fn extract_auxiliary_data_from_krc(content: &str) -> Result<KrcAuxiliaryData, ConvertError> {
+    let mut aux_data = KrcAuxiliaryData::default();
+
     if let Some(caps) = KRC_TRANSLATION_REGEX.captures(content) {
         let base64_str = &caps["base64"];
         let decoded_bytes = general_purpose::STANDARD
@@ -170,65 +195,60 @@ pub fn extract_translation_from_krc(content: &str) -> Result<Option<Vec<String>>
         let decoded_text = String::from_utf8(decoded_bytes).map_err(ConvertError::FromUtf8)?;
 
         // 将解码后的文本作为 JSON 解析
-        let parsed_json: TranslationJson = serde_json::from_str(&decoded_text)
-            .map_err(|e| ConvertError::json_parse(e, "KRC 内嵌翻译 JSON".to_string()))?;
+        let parsed_json: KrcJson = serde_json::from_str(&decoded_text)
+            .map_err(|e| ConvertError::json_parse(e, "KRC 内嵌 JSON".to_string()))?;
 
-        // 从 JSON 结构中提取翻译行
-        if let Some(first_content) = parsed_json.content.first() {
-            let translation_lines: Vec<String> = first_content
+        for entry in parsed_json.content {
+            let lines: Vec<String> = entry
                 .lyric_content
                 .iter()
                 // 每行翻译本身也是一个数组，将数组内的字符串连接起来
                 .map(|line_parts| line_parts.join(""))
                 .collect();
 
-            return Ok(Some(translation_lines));
+            match entry.content_type {
+                1 => aux_data.translations = lines,
+                0 => aux_data.romanizations = lines,
+                _ => {}
+            }
         }
     }
-    Ok(None)
+    Ok(aux_data)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const KRC_CONTENT: &str = r#"
-[language:eyJjb250ZW50IjpbeyJsYW5ndWFnZSI6MCwibHlyaWNDb250ZW50IjpbWyIgIl0sWyIgIl0sWyIgIl0sWyIgIl0sWyJcdTY3MDBcdThGRDFcdTYyMTFcdTYwM0JcdTY2MkZcdThGOTdcdThGNkNcdTUzQ0RcdTRGQTcgXHU5NkJFXHU0RUU1XHU1MTY1XHU3NzIwIl0sWyJcdTVCRjlcdTYyMTFcdTRFRUNcdTY2RkVcdTY3MDlcdThGQzdcdTc2ODRcdTYxM0ZcdTY2NkZcdTZENkVcdTYwRjNcdTgwNTRcdTdGRTkiXSxbIlx1NEY0Nlx1NEVCMlx1NzIzMVx1NzY4NCBcdTYyMTFcdTY1RTlcdTVERjJcdTU3MjhcdTUxODVcdTVGQzNcdTZERjFcdTU5MDRcdTc5NDhcdTc5NzdcdTc3NDAiXSxbIlx1Nzk0OFx1Nzk3N1x1ODFFQVx1NURGMVx1NEUwRFx1NTE4RFx1OEZGN1x1NTkzMVx1NEU4RVx1OTFEMVx1OTRCMVx1NzY4NFx1OEZGRFx1OTAxMFx1NEUyRCJdLFsiXHU2MjExXHU0RUVDXHU1M0VGXHU0RUU1XHU3RUM2XHU2NTcwXHU2RUUxXHU1OTI5XHU3RTQxXHU2NjFGIl0sWyJcdTY2MkZcdTU1NEEgXHU2MjExXHU0RUVDXHU1M0VGXHU0RUU1XHU3RUM2XHU2NTcwXHU2RUUxXHU1OTI5XHU3RTQxXHU2NjFGIl0sWyJcdTc1MUZcdTZEM0JcdTVDMzFcdTUwQ0ZcdTRFMDBcdTY4MkFcdThEQzNcdTUyQThcdTc2ODRcdTg1RTRcdTg1MTMiXSxbIlx1OTU3Rlx1OUE3MVx1NzZGNFx1NTE2NSBcdTZGQzBcdTZEM0JcdTYyMTFcdTc2ODRcdTUxODVcdTVGQzMiXSxbIlx1NjIxMVx1ODBGRFx1NjExRlx1NTNEN1x1NTIzMFx1NTkyQVx1OTYzM1x1NzY4NFx1ODAwMFx1NzczQyJdLFsiXHU5MDREXHU1QkZCXHU0RTRCXHU1NDBFXHU0RjYwXHU1QzMxXHU0RjFBXHU1M0QxXHU3M0IwIl0sWyJcdTYyMTFcdTg2N0RcdTRFMEFcdTRFODZcdTVFNzRcdTdFQUEgXHU0RjQ2XHU0RTVGXHU0RTBEXHU2NjJGXHU4MDAxXHU2MDAxXHU5Rjk5XHU5NDlGIl0sWyJcdTg2N0RcdThGRDhcdTVFNzRcdThGN0IgXHU1Mzc0XHU2NzJBXHU1RkM1XHU5QzgxXHU4M0JEXHU1OTMxXHU3OTNDIl0sWyJcdTU3NUFcdTRGRTFcdThGRDlcdTRFMkFcdTRFMTZcdTc1NENcdTdGOEVcdTU5N0RcdTU5ODJcdTUyMUQiXSxbIlx1NjIxMVx1NTNFQVx1NjYyRlx1NUZBQVx1ODlDNFx1OEU0OFx1NzdFOVx1NTczMFx1NzUxRlx1NkQzQlx1Nzc0MCJdLFsiXHU2MEVGXHU0RThFXHU3OUJCXHU3RUNGXHU1M0RCXHU5MDUzXHU0RTJEIl0sWyJcdTRGNTNcdTU0NzNcdTVGQzNcdTVCODlcdTc0MDZcdTVGOTciXSxbIlx1NEVBNlx1NEU4RVx1NjMwOVx1OTBFOFx1NUMzMVx1NzNFRFx1NEUyRCJdLFsiXHU3NURCXHU2MTFGXHU0RTRGXHU1NTg0XHU1M0VGXHU5NjQ4Il0sWyJcdTYyMTFcdTRFMERcdTUzRUZcdTRFRTVcdTgxRUFcdTZCM0FcdTZCM0FcdTRFQkEgXHU0RTBEXHU1M0VGXHU0RUU1XHU4MUVBXHU2QjNBXHU2QjNBXHU0RUJBIl0sWyJcdTRGNDZcdTdGNkVcdTYyMTFcdTRFOEVcdTZCN0JcdTU3MzBcdTgwMDUgXHU1RkM1XHU1QzA2XHU4RDUwXHU2MjExXHU0RUU1XHU1NDBFXHU3NTFGIl0sWyJcdTY3MDBcdThGRDFcdTYyMTFcdTYwM0JcdTY2MkZcdThGOTdcdThGNkNcdTUzQ0RcdTRGQTcgXHU5NkJFXHU0RUU1XHU1MTY1XHU3NzIwIl0sWyJcdTVCRjlcdTYyMTFcdTRFRUNcdTY2RkVcdTY3MDlcdThGQzdcdTc2ODRcdTYxM0ZcdTY2NkZcdTZENkVcdTYwRjNcdTgwNTRcdTdGRTkiXSxbIlx1NEY0Nlx1NEVCMlx1NzIzMVx1NzY4NCBcdTYyMTFcdTY1RTlcdTVERjJcdTU3MjhcdTUxODVcdTVGQzNcdTZERjFcdTU5MDRcdTc5NDhcdTc5NzdcdTc3NDAiXSxbIlx1Nzk0OFx1Nzk3N1x1ODFFQVx1NURGMVx1NEUwRFx1NTE4RFx1OEZGN1x1NTkzMVx1NEU4RVx1OTFEMVx1OTRCMVx1NzY4NFx1OEZGRFx1OTAxMFx1NEUyRCJdLFsiXHU2MjExXHU0RUVDXHU1M0VGXHU0RUU1XHU3RUM2XHU2NTcwXHU2RUUxXHU1OTI5XHU3RTQxXHU2NjFGIl0sWyJcdTY3MDBcdThGRDFcdTYyMTFcdTYwM0JcdTY2MkZcdThGOTdcdThGNkNcdTUzQ0RcdTRGQTcgXHU5NkJFXHU0RUU1XHU1MTY1XHU3NzIwIl0sWyJcdTVCRjlcdTYyMTFcdTRFRUNcdTY2RkVcdTY3MDlcdThGQzdcdTc2ODRcdTYxM0ZcdTY2NkZcdTZENkVcdTYwRjNcdTgwNTRcdTdGRTkiXSxbIlx1NEY0Nlx1NEVCMlx1NzIzMVx1NzY4NCBcdTYyMTFcdTY1RTlcdTVERjJcdTU3MjhcdTUxODVcdTVGQzNcdTZERjFcdTU5MDRcdTc5NDhcdTc5NzdcdTc3NDAiXSxbIlx1Nzk0OFx1Nzk3N1x1ODFFQVx1NURGMVx1NEUwRFx1NTE4RFx1OEZGN1x1NTkzMVx1NEU4RVx1OTFEMVx1OTRCMVx1NzY4NFx1OEZGRFx1OTAxMFx1NEUyRCJdLFsiXHU2MjExXHU0RUVDXHU1M0VGXHU0RUU1XHU3RUM2XHU2NTcwXHU2RUUxXHU1OTI5XHU3RTQxXHU2NjFGIl0sWyJcdTYyMTFcdTYxMUZcdTg5QzlcdTUyMzBcdTcyMzFcdTRFODYgXHU2MjExXHU2MTFGXHU4OUM5XHU1MjMwXHU1QjgzXHU2QjYzXHU1NzI4XHU3MUMzXHU3MEU3Il0sWyJcdTRFOEVcdTZDQjNcdTZENDFcdTc2ODRcdTZCQ0ZcdTRFMkFcdThGQzJcdTU2REVcdTU5MDRcdTdGRkJcdTgxN0UiXSxbIlx1NUUwQ1x1NjcxQlx1NTNFQVx1NjYyRlx1NEUyQVx1NTZEQlx1NUI1N1x1NTM1NVx1OEJDRCJdLFsiXHU4RUFCXHU1OTE2XHU0RTRCXHU3MjY5IFx1NzY4Nlx1NTNFRlx1NjI5Qlx1NTM3NCJdLFsiXHU2MjExXHU4NjdEXHU0RTBBXHU0RTg2XHU1RTc0XHU3RUFBIFx1NEY0Nlx1NEU1Rlx1NEUwRFx1NjYyRlx1ODAwMVx1NjAwMVx1OUY5OVx1OTQ5RiJdLFsiXHU4NjdEXHU4RkQ4XHU1RTc0XHU4RjdCIFx1NTM3NFx1NjcyQVx1NUZDNVx1OUM4MVx1ODNCRFx1NTkzMVx1NzkzQyJdLFsiXHU1NzVBXHU0RkUxXHU4RkQ5XHU0RTJBXHU0RTE2XHU3NTRDXHU3RjhFXHU1OTdEXHU1OTgyXHU1MjFEIl0sWyJcdTYyMTFcdTUzRUFcdTY2MkZcdTVGQUFcdTg5QzRcdThFNDhcdTc3RTlcdTU3MzBcdTc1MUZcdTZEM0JcdTc3NDAiXSxbIlx1NEVBNlx1NEU4RVx1NjMwOVx1OTBFOFx1NUMzMVx1NzNFRFx1NEUyRCJdLFsiXHU3NURCXHU2MTFGXHU0RTRGXHU1NTg0XHU1M0VGXHU5NjQ4Il0sWyJcdTYyMTFcdTRFMERcdTUzRUZcdTRFRTVcdTgxRUFcdTZCM0FcdTZCM0FcdTRFQkEgXHU0RTBEXHU1M0VGXHU0RUU1XHU4MUVBXHU2QjNBXHU2QjNBXHU0RUJBIl0sWyJcdTRFMDBcdTUyMDdcdTZERjlcdTZDQTFcdTYyMTFcdTc2ODRcdTRFMUNcdTg5N0YgXHU2MDNCXHU2NjJGXHU2MEYzXHU4QkE5XHU2MjExXHU5OERFXHU3RkQ0Il0sWyJcdTY3MDBcdThGRDFcdTYyMTFcdTYwM0JcdTY2MkZcdThGOTdcdThGNkNcdTUzQ0RcdTRGQTcgXHU5NkJFXHU0RUU1XHU1MTY1XHU3NzIwIl0sWyJcdTVCRjlcdTYyMTFcdTRFRUNcdTY2RkVcdTY3MDlcdThGQzdcdTc2ODRcdTYxM0ZcdTY2NkZcdTZENkVcdTYwRjNcdTgwNTRcdTdGRTkiXSxbIlx1NEY0Nlx1NEVCMlx1NzIzMVx1NzY4NCBcdTYyMTFcdTY1RTlcdTVERjJcdTU3MjhcdTUxODVcdTVGQzNcdTZERjFcdTU5MDRcdTc5NDhcdTc5NzdcdTc3NDAiXSxbIlx1Nzk0OFx1Nzk3N1x1ODFFQVx1NURGMVx1NEUwRFx1NTE4RFx1OEZGN1x1NTkzMVx1NEU4RVx1OTFEMVx1OTRCMVx1NzY4NFx1OEZGRFx1OTAxMFx1NEUyRCJdLFsiXHU2MjExXHU0RUVDXHU1M0VGXHU0RUU1XHU3RUM2XHU2NTcwXHU2RUUxXHU1OTI5XHU3RTQxXHU2NjFGIl0sWyJcdTY3MDBcdThGRDFcdTYyMTFcdTYwM0JcdTY2MkZcdThGOTdcdThGNkNcdTUzQ0RcdTRGQTcgXHU5NkJFXHU0RUU1XHU1MTY1XHU3NzIwIl0sWyJcdTVCRjlcdTYyMTFcdTRFRUNcdTY2RkVcdTY3MDlcdThGQzdcdTc2ODRcdTYxM0ZcdTY2NkZcdTZENkVcdTYwRjNcdTgwNTRcdTdGRTkiXSxbIlx1NEY0Nlx1NEVCMlx1NzIzMVx1NzY4NCBcdTYyMTFcdTY1RTlcdTVERjJcdTU3MjhcdTUxODVcdTVGQzNcdTZERjFcdTU5MDRcdTc5NDhcdTc5NzdcdTc3NDAiXSxbIlx1Nzk0OFx1Nzk3N1x1ODFFQVx1NURGMVx1NEUwRFx1NTE4RFx1OEZGN1x1NTkzMVx1NEU4RVx1OTFEMVx1OTRCMVx1NzY4NFx1OEZGRFx1OTAxMFx1NEUyRCJdLFsiXHU2MjExXHU0RUVDXHU1M0VGXHU0RUU1XHU3RUM2XHU2NTcwXHU2RUUxXHU1OTI5XHU3RTQxXHU2NjFGIl0sWyJcdThFQUJcdTU5MTZcdTRFNEJcdTcyNjkiXSxbIlx1NzY4Nlx1NTNFRlx1NjI5Qlx1NTM3NCJdLFsiXHU2Q0RCXHU4MjFGXHU1RjUzXHU2QjRDIl0sWyJcdTRFQkFcdTc1MUZcdTUxRTBcdTRGNTUiXSxbIlx1OEVBQlx1NTkxNlx1NEU0Qlx1NzI2OSJdLFsiXHU3Njg2XHU1M0VGXHU2MjlCXHU1Mzc0Il0sWyJcdTZDREJcdTgyMUZcdTVGNTNcdTZCNEMiXSxbIlx1NEVCQVx1NzUxRlx1NTFFMFx1NEY1NSJdLFsiXHU4RUFCXHU1OTE2XHU0RTRCXHU3MjY5Il0sWyJcdTc2ODZcdTUzRUZcdTYyOUJcdTUzNzQiXSxbIlx1NkNEQlx1ODIxRlx1NUY1M1x1NkI0QyJdLFsiXHU0RUJBXHU3NTFGXHU1MUUwXHU0RjU1Il0sWyJcdThFQUJcdTU5MTZcdTRFNEJcdTcyNjkiXSxbIlx1NzY4Nlx1NTNFRlx1NjI5Qlx1NTM3NCJdLFsiXHU2Q0RCXHU4MjFGXHU1RjUzXHU2QjRDIl0sWyJcdTRFQkFcdTc1MUZcdTUxRTBcdTRGNTUiXSxbIlx1NEY0Nlx1N0Y2RVx1NjIxMVx1NEU4RVx1NkI3Qlx1NTczMFx1ODAwNSJdLFsiXHU1RkM1XHU1QzA2XHU4RDUwXHU2MjExXHU0RUU1XHU1NDBFXHU3NTFGIl0sWyJcdTY3MDBcdThGRDFcdTYyMTFcdTYwM0JcdTY2MkZcdThGOTdcdThGNkNcdTUzQ0RcdTRGQTcgXHU5NkJFXHU0RUU1XHU1MTY1XHU3NzIwIl0sWyJcdTVCRjlcdTYyMTFcdTRFRUNcdTY2RkVcdTY3MDlcdThGQzdcdTc2ODRcdTYxM0ZcdTY2NkZcdTZENkVcdTYwRjNcdTgwNTRcdTdGRTkiXSxbIlx1NEY0Nlx1NEVCMlx1NzIzMVx1NzY4NCBcdTYyMTFcdTY1RTlcdTVERjJcdTU3MjhcdTUxODVcdTVGQzNcdTZERjFcdTU5MDRcdTc5NDhcdTc5NzdcdTc3NDAiXSxbIlx1Nzk0OFx1Nzk3N1x1ODFFQVx1NURGMVx1NEUwRFx1NTE4RFx1OEZGN1x1NTkzMVx1NEU4RVx1OTFEMVx1OTRCMVx1NzY4NFx1OEZGRFx1OTAxMFx1NEUyRCJdLFsiXHU2MjExXHU0RUVDXHU1M0VGXHU0RUU1XHU3RUM2XHU2NTcwXHU2RUUxXHU1OTI5XHU3RTQxXHU2NjFGIl0sWyJcdTY3MDBcdThGRDFcdTYyMTFcdTYwM0JcdTY2MkZcdThGOTdcdThGNkNcdTUzQ0RcdTRGQTcgXHU5NkJFXHU0RUU1XHU1MTY1XHU3NzIwIl0sWyJcdTVCRjlcdTYyMTFcdTRFRUNcdTY2RkVcdTY3MDlcdThGQzdcdTc2ODRcdTYxM0ZcdTY2NkZcdTZENkVcdTYwRjNcdTgwNTRcdTdGRTkiXSxbIlx1NEY0Nlx1NEVCMlx1NzIzMVx1NzY4NCBcdTYyMTFcdTY1RTlcdTVERjJcdTU3MjhcdTUxODVcdTVGQzNcdTZERjFcdTU5MDRcdTc5NDhcdTc5NzdcdTc3NDAiXSxbIlx1Nzk0OFx1Nzk3N1x1ODFFQVx1NURGMVx1NEUwRFx1NTE4RFx1OEZGN1x1NTkzMVx1NEU4RVx1OTFEMVx1OTRCMVx1NzY4NFx1OEZGRFx1OTAxMFx1NEUyRCJdLFsiXHU2MjExXHU0RUVDXHU1M0VGXHU0RUU1XHU3RUM2XHU2NTcwXHU2RUUxXHU1OTI5XHU3RTQxXHU2NjFGIl0sWyJcdThFQUJcdTU5MTZcdTRFNEJcdTcyNjkiXSxbIlx1NzY4Nlx1NTNFRlx1NjI5Qlx1NTM3NCJdLFsiXHU2Q0RCXHU4MjFGXHU1RjUzXHU2QjRDIl0sWyJcdTRFQkFcdTc1MUZcdTUxRTBcdTRGNTUiXSxbIlx1OEVBQlx1NTkxNlx1NEU0Qlx1NzI2OSJdLFsiXHU3Njg2XHU1M0VGXHU2MjlCXHU1Mzc0Il0sWyJcdTZDREJcdTgyMUZcdTVGNTNcdTZCNEMiXSxbIlx1NEVCQVx1NzUxRlx1NTFFMFx1NEY1NSJdLFsiXHU4RUFCXHU1OTE2XHU0RTRCXHU3MjY5Il0sWyJcdTc2ODZcdTUzRUZcdTYyOUJcdTUzNzQiXSxbIlx1NkNEQlx1ODIxRlx1NUY1M1x1NkI0QyJdLFsiXHU0RUJBXHU3NTFGXHU1MUUwXHU0RjU1Il0sWyJcdThFQUJcdTU5MTZcdTRFNEJcdTcyNjkiXSxbIlx1NzY4Nlx1NTNFRlx1NjI5Qlx1NTM3NCJdLFsiXHU2Q0RCXHU4MjFGXHU1RjUzXHU2QjRDIl0sWyJcdTRFQkFcdTc1MUZcdTUxRTBcdTRGNTUiXV0sInR5cGUiOjF9XSwidmVyc2lvbiI6MX0=]
-[47,71]<0,0,0>Counting <0,37,0>Stars <37,0,0>- <37,34,0>OneRepublic
-[190,200]<0,28,0>Lyrics<28,28,0> <56,28,0>by<84,28,0>：<112,28,0>Ryan<140,28,0> <168,28,0>Tedder
-[390,200]<0,28,0>Composed<28,28,0> <56,28,0>by<84,28,0>：<112,28,0>Ryan<140,28,0> <168,28,0>Tedder
-[590,190]<0,17,0>Produced<17,17,0> <34,17,0>by<51,17,0>：<68,17,0>Ryan<85,17,0> <102,17,0>Tedder<119,17,0>/<136,17,0>Noel<153,17,0> <170,17,0>Zancanella
-[790,3661]<0,1072,0>Lately <1072,533,0>I've <1605,471,0>been <2076,343,0>I've <2419,327,0>been <2746,348,0>losing <3094,567,0>sleep
-[5499,3492]<0,642,0>Dreaming <642,463,0>about <1105,279,0>the <1384,383,0>things <1767,599,0>that we <2366,633,0>could <2999,493,0>be
-[9390,4266]<0,200,0>But <200,1079,0>baby <1279,417,0>I've <1696,687,0>been <2383,215,0>I've <2598,326,0>been <2924,344,0>praying <3268,998,0>hard
-[14361,1996]<0,190,0>Said <190,362,0>no <552,263,0>more <815,446,0>counting <1261,735,0>dollars
-[16362,2920]<0,144,0>We'll <144,285,0>be <429,590,0>counting <1019,1901,0>stars
-[19286,3606]<0,530,0>Yeah <530,191,0>we'll <721,182,0>be <903,1330,0>counting <2233,1373,0>stars
-"#;
-
     #[test]
-    fn debug_krc_parsing_flow() {
-        let parsed_data = parse_krc(KRC_CONTENT).unwrap();
+    fn test_krc_parses_translation_and_romanization() {
+        const KRC_WITH_ROMANIZATION: &str = r#"
+            [language:eyJjb250ZW50IjpbeyJsYW5ndWFnZSI6MCwibHlyaWNDb250ZW50IjpbWyIgIl0sWyIgIl0sWyIgIl0sWyJcdTUxNzNcdTRFOEVcdTRGNjBcdTY2RkVcdTRFQTRcdTVGODBcdThGQzdcdTc2ODRcdTkwQTNcdTRFMkFcdTRFQkEiXSxbIlx1NUY1M1x1NEY2MFx1NUJGOVx1NjIxMVx1NTE2OFx1NzZEOFx1NTAzRVx1OEJDOVx1NjVGNiJdLFsiXHU2MjExXHU2NzJBXHU4MEZEXHU1NzY2XHU3Mzg3XHU1NzMwXHU5NzU5XHU5NzU5XHU4MDQ2XHU1NDJDIl0sWyJcdTRFMDBcdTVCOUFcdThCQTlcdTRGNjBcdTYxMUZcdTg5QzlcdTUyMzBcdTVCQzJcdTVCREVcdTRFODZcdTU0MjciXSxbIlx1NTJBOFx1NEUwRFx1NTJBOFx1NUMzMVx1NEYxQVx1NTQwM1x1OTE4QiJdLFsiXHU2NjBFXHU2NjBFXHU1QzMxXHU3N0U1XHU5MDUzIl0sWyJcdThGRDlcdTY2MkZcdTYyMTFcdTc2ODRcdTU3NEZcdTRFNjBcdTYwRUYiXSxbIlx1NEVGQlx1NjAyN1x1NzY4NFx1NjBGM1x1NkNENSJdLFsiXHU1MzE2XHU0RjVDXHU2QjhCXHU5MTc3XHU3Njg0XHU4QkREXHU4QkVEIl0sWyJcdTRGMjRcdTVCQjNcdTUyMzBcdTRFODZcdTRGNjAiXSxbIlx1NTNFQVx1NjYyRlx1NUMzMVx1NkI2NFx1NzZGOFx1NEYzNCJdLFsiXHU1M0VBXHU2NjJGXHU1RjdDXHU2QjY0XHU1M0NDXHU2MjRCXHU3NkY4XHU3Mjc1Il0sWyJcdTRGQkZcdTU5ODJcdTZCNjRcdTdGOEVcdTU5N0QiXSxbIlx1NEU1Rlx1OEJCOFx1OEQ4QVx1OTFDRFx1ODk4MVx1NzY4NFx1NEU4Qlx1OEQ4QVx1NEYxQVx1NTcyOFx1NzE5Rlx1NjA4OVx1NzY4NFx1NTczMFx1NjVCOSJdLFsiXHU1MTQwXHU4MUVBXHU1NzMwXHU5NUVBXHU4MDAwXHU3NzQwXHU1MTQ5XHU4MjkyXHU1NDI3Il0sWyJcdTYwRjNcdTg5ODFcdTdEMjdcdTdEMjdcdTU3MzBcdTYyRTVcdTRGNEZcdTRGNjAiXSxbIlx1NTNFQVx1NEUzQVx1NEU4Nlx1ODFFQVx1NURGMSJdLFsiXHU4MDBDXHU2RDNCXHU3Njg0XHU0RUJBIl0sWyJcdTU5N0RcdTUwQ0ZcdTUxNjhcdTgwNUFcdTk2QzZcdTU3MjhcdThGRDlcdTVFQTdcdTU3Q0VcdTVFMDJcdTkxQ0MiXSxbIlx1NzUzMVx1ODg3N1x1NjAxRFx1NUZGNVx1Nzc0MFx1NjdEMFx1NEVCQVx1NzY4NFx1NUU3OFx1Nzk4RiJdLFsiXHU2MjExXHU2QzM4XHU4RkRDXHU5MEZEXHU0RTBEXHU2MTNGXHU1RkQ4XHU4QkIwIl0sWyJcdThGREVcdTRGNjBcdThGRDlcdTc5Q0RcdTUyQThcdTRFMERcdTUyQThcdTU0MDNcdTkxOEJcdTc2ODRcdTU3MzBcdTY1QjkiXSxbIlx1NjIxMVx1OTBGRFx1NUY4OFx1NTU5Q1x1NkIyMiBcdTRGNjBcdTdCMTFcdTc3NDBcdThDMDNcdTRGODNcdTYyMTEiXSxbIlx1NjIxMVx1NUY4OFx1NEY5RFx1OEQ1Nlx1OTBBM1x1NjgzN1x1NzY4NFx1NEY2MCJdLFsiXHU3M0IwXHU1NzI4XHU5QTZDXHU0RTBBXHU1QzMxXHU2MEYzXHU3NTI4Il0sWyJcdThCRERcdThCRURcdTRFRTVcdTU5MTZcdTc2ODRcdTY1QjlcdTZDRDUiXSxbIlx1NUMwNlx1NzIzMVx1NjEwRlx1NEYyMFx1OEZCRVx1N0VEOVx1NEY2MCJdLFsiXHU0RTBEXHU4QkJBXHU2NjJGXHU0RjYwXHU1RkFFXHU3QjExXHU3Njg0XHU5NzYyXHU1RTlFIl0sWyJcdThGRDhcdTY2MkZcdTc1MUZcdTZDMTRcdTc2ODRcdTY4MzdcdTVCNTAiXSxbIlx1OTBGRFx1OEJBOVx1NjIxMVx1ODlDOVx1NUY5N1x1NTNFRlx1NzIzMVx1NTIzMFx1NjVFMFx1NTNFRlx1NjU1MVx1ODM2RiJdLFsiXHU0RTBEXHU4QkJBXHU2NjJGXHU2NkZFXHU1NDExXHU2MjExXHU1NzY2XHU3NjdEXHU3Njg0XHU4RkM3XHU1M0JCIl0sWyJcdThGRDhcdTY2MkZcdTRFMjRcdTRFQkFcdTUxNzFcdTU0MENcdTRFRjBcdTY3MUJcdThGQzdcdTc2ODRcdTg0RERcdTU5MjkgXHU2MjExXHU5MEZEXHU0RTBEXHU0RjFBXHU1RkQ4XHU4QkIwIl0sWyJcdTUzRUFcdTY2MkZcdTVDMzFcdTZCNjRcdTc2RjhcdTRGMzQiXSxbIlx1NTNFQVx1NjYyRlx1NUY3Q1x1NkI2NFx1NTNDQ1x1NjI0Qlx1NzZGOFx1NzI3NSJdLFsiXHU0RkJGXHU1OTgyXHU2QjY0XHU3RjhFXHU1OTdEIl0sWyJcdTRFNUZcdThCQjhcdThEOEFcdTkxQ0RcdTg5ODFcdTc2ODRcdTRFOEJcdThEOEFcdTRGMUFcdTU3MjhcdTcxOUZcdTYwODlcdTc2ODRcdTU3MzBcdTY1QjkiXSxbIlx1NTE0MFx1ODFFQVx1NTczMFx1OTVFQVx1ODAwMFx1Nzc0MFx1NTE0OVx1ODI5Mlx1NTQyNyJdLFsiXHU0RTBEXHU4QkJBXHU2NjJGXHU0RjYwXHU1RkFFXHU3QjExXHU3Njg0XHU5NzYyXHU1RTlFIl0sWyJcdThGRDhcdTY2MkZcdTc1MUZcdTZDMTRcdTc2ODRcdTY4MzdcdTVCNTAiXSxbIlx1OTBGRFx1OEJBOVx1NjIxMVx1ODlDOVx1NUY5N1x1NTNFRlx1NzIzMVx1NTIzMFx1NjVFMFx1NTNFRlx1NjU1MVx1ODM2RiJdLFsiXHU2MjExXHU1NTlDXHU2QjIyXHU0RjYwXHU3Njg0XHU0RTAwXHU1MjA3Il0sWyJcdTRFQ0VcdTRFQ0FcdTVGODBcdTU0MEUiXSxbIlx1NEU1Rlx1NjBGM1x1NkMzOFx1OEZEQ1x1NUMwNlx1NEY2MFx1N0QyN1x1NjJFNSJdLFsiXHU2MEYzXHU4OTgxXHU3RDI3XHU3RDI3XHU1NzMwXHU2MkU1XHU0RjRGXHU0RjYwIl1dLCJ0eXBlIjoxfSx7Imxhbmd1YWdlIjowLCJseXJpY0NvbnRlbnQiOltbInRhIGthICAiLCJoYSBzaGkgICIsIiAgICIsIi0gICIsInlhICAiLCJraSAgIiwibW8gICIsImNoaSAgICIsIihkbyBtbyAgIiwic3UgKSJdLFsic2Ega3UgICIsInNoaSA6ICIsInRhIGthICAiLCJoYSBzaGkgICIsIiAiXSxbInNhIGtreW8gICIsImt1IDogIiwidGEga2EgICIsImhhIHNoaSAgIiwiICJdLFsia2kgbWkgICIsImdhICAiLCJtYSBlICAiLCJuaSAgIiwidHN1ICAiLCJraSAgIiwiYSAgIiwiJ3QgICIsInRlICAiLCJpICAiLCJ0YSAgIiwiaGkgdG8gICIsIm5vICAiLCJrbyAgIiwidG8gIl0sWyJibyBrdSAgIiwibmkgICIsInUgICIsImNoaSAgIiwiYSAgIiwia2UgICIsInRlICAiLCJrdSAgIiwicmUgICIsInRhICAiLCJ0byAgIiwia2kgIl0sWyJzdSBuYSAgIiwibyAgIiwibmkgICIsImtpICAiLCJpICAiLCJ0ZSAgIiwiYSAgIiwiZ2UgICIsInJhICAiLCJyZSAgIiwienUgICIsIm5pICJdLFsic2EgYmkgICIsInNoaSAgIiwiaSAgIiwibyBtbyAgIiwiaSAgIiwid28gICIsInNhICAiLCJzZSAgIiwidGUgICIsInNoaSAgIiwibWEgICIsIid0ICAiLCJ0YSAgIiwibmUgIl0sWyJzdSAgIiwiZ3UgICIsIm5pICAiLCJ5YSAgIiwia2kgICIsIm1vICAiLCJjaGkgICIsInlhICAiLCJrdSAgIiwibm8gICIsImdhICJdLFsiYm8ga3UgICIsIm5vICAiLCJ3YSBydSAgIiwiaSAgIiwia3Ugc2UgICIsImRhICAiLCJ0dGUgICIsIiAiXSxbIndhICAiLCJrYSAgIiwiJ3QgICIsInRlICAiLCJpICAiLCJ0YSAgIiwiaGEgenUgICIsIm5hICAiLCJubyAgIiwibmkgIl0sWyJqaSBidSAgIiwibiAgIiwia2EgICIsInR0ZSAgIiwibmEgICIsIm8gbW8gICIsImkgICIsImdhICJdLFsiemEgbiAgIiwia28ga3UgICIsIm5hICAiLCJrbyB0byAgIiwiYmEgICIsIm5pICAiLCJuYSAgIiwiJ3QgICIsInRlICJdLFsia2kgbWkgICIsIndvICAiLCJraSB6dSAgIiwidHN1ICAiLCJrZSAgIiwidGUgICIsInRhICJdLFsiaSAgIiwic3NobyAgIiwibmkgICIsImkgICIsInJhICAiLCJyZSAgIiwicnUgICIsImRhICAiLCJrZSAgIiwiZGUgIl0sWyJ0ZSAgIiwidG8gICIsInRlICAiLCJ3byAgIiwia2Egc2EgICIsIm5lICAiLCJhICAiLCJlICAiLCJydSAgIiwiZGEgICIsImtlICAiLCJkZSAiXSxbInlvICAiLCJrYSAgIiwidHN1ICAiLCJ0YSAgIiwibmUgIl0sWyJ0YSBpICAiLCJzZSB0c3UgICIsIm5hICAiLCJrbyB0byAgIiwiaG8gICIsImRvICAiLCJtaSAgIiwibmEgICIsInJlICAiLCJ0YSAgIiwiYmEgICIsInNobyAgIiwiZGUgIl0sWyJrYSBnYSB5YSAgIiwia3UgICIsIm5vICAiLCJrYSAgIiwibW8gICIsInNoaSAgIiwicmUgICIsIm5hICAiLCJpICJdLFsia2kgbWkgICIsIndvICAiLCJ0c3UgeW8gICIsImt1ICAiLCJkYSAgIiwia2kgICIsInNoaSAgIiwibWUgICIsInRhICAiLCJpICJdLFsiamkgYnUgICIsIm4gICIsIm5vICAiLCJ0YSAgIiwibWUgICIsImRhICAiLCJrZSAgIiwibmkgIl0sWyJpICAiLCJraSAgIiwidGUgICIsImkgICIsInJ1ICAiLCJoaSB0byAgIiwiZ2EgIl0sWyJhIHRzdSAgIiwibWUgICIsInJhICAiLCJyZSAgIiwidGEgICIsInlvICAiLCJ1ICAiLCJuYSAgIiwia28gICIsIm5vICAiLCJtYSBjaGkgICIsImRlICJdLFsiZGEgcmUgICIsImthICAiLCJ3byAgIiwia28ga28gcm8gICIsImthICAiLCJyYSAgIiwibyBtbyAgIiwiZSAgIiwicnUgICIsInNoaSBhICAiLCJ3YSBzZSAgIiwid28gIl0sWyJpICAiLCJ0c3UgICIsIm1hICAiLCJkZSAgIiwibW8gICIsIndhIHN1ICAiLCJyZSAgIiwidGEgICIsImt1ICAiLCJuYSAgIiwiaSAiXSxbInN1ICAiLCJndSAgIiwibmkgICIsInlhICAiLCJraSAgIiwibW8gICIsImNoaSAgIiwieWEgICIsImt1ICAiLCJ0byAgIiwia28gICIsIm1vICJdLFsic3UgICIsImtpICAiLCJkYSAgIiwieW8gICIsIid0ICAiLCJ0ZSAgIiwia2EgICIsInJhICAiLCJrYSAgIiwiJ3QgICIsInRlICJdLFsid2EgcmEgICIsInUgICIsImtpIG1pICAiLCJuaSAgIiwiYSBtYSAgIiwiZSAgIiwidGUgICIsImkgICIsInRhICJdLFsiYSBpICAiLCJzaGkgICIsInRlICAiLCJpICAiLCJydSAgIiwia28gICIsInRvICAiLCJ3byAiXSxbImtvIHRvICAiLCJiYSAgIiwiaSBnYSAgIiwiaSAgIiwibm8gICIsImhvIHUgICIsImhvIHUgICIsImRlICJdLFsiaSBtYSAgIiwic3UgICIsImd1ICAiLCJuaSAgIiwidHN1IHRhICAiLCJlICAiLCJ0YSAgIiwiaSAiXSxbImhvIGhvICAiLCJlICAiLCJuICAiLCJkZSAgIiwia3UgICIsInJlICAiLCJ0YSAgIiwia2EgbyAgIiwibW8gIl0sWyJvIGtvICAiLCIndCAgIiwidGEgICIsImthIG8gICIsIm1vICJdLFsiaSB0byAgIiwic2hpICAiLCJrdSAgIiwidGUgICIsInNoaSBrYSAgIiwidGEgICIsIm5hICAiLCJrYSAgIiwidHN1ICAiLCJ0YSAgIiwieW8gIl0sWyJ1ICAiLCJjaGkgICIsImEgICIsImtlICAiLCJ0ZSAgIiwia3UgICIsInJlICAiLCJ0YSAgIiwia2EgICIsImtvICAiLCJtbyAiXSxbImZ1IHRhICAiLCJyaSAgIiwiZ2EgICIsIm1pICAiLCJ0YSAgIiwiYSBvICAiLCJ6byByYSAgIiwibW8gICIsIndhIHN1ICAiLCJyZSAgIiwibmEgICIsImkgIl0sWyJpICAiLCJzc2hvICAiLCJuaSAgIiwiaSAgIiwicmEgICIsInJlICAiLCJydSAgIiwiZGEgICIsImtlICAiLCJkZSAiXSxbInRlICAiLCJ0byAgIiwidGUgICIsIndvICAiLCJrYSBzYSAgIiwibmUgICIsImEgICIsImUgICIsInJ1ICAiLCJkYSAgIiwia2UgICIsImRlICJdLFsieW8gICIsImthICAiLCJ0c3UgICIsInRhICAiLCJuZSAiXSxbInRhIGkgICIsInNlIHRzdSAgIiwibmEgICIsImtvIHRvICAiLCJobyAgIiwiZG8gICIsIm1pICAiLCJuYSAgIiwicmUgICIsInRhICAiLCJiYSAgIiwic2hvICAiLCJkZSAiXSxbImthIGdhIHlhICAiLCJrdSAgIiwibm8gICIsImthICAiLCJtbyAgIiwic2hpICAiLCJyZSAgIiwibmEgICIsImkgIl0sWyJobyBobyAgIiwiZSAgIiwibiAgIiwiZGUgICIsImt1ICAiLCJyZSAgIiwidGEgICIsImthIG8gICIsIm1vICJdLFsibyBrbyAgIiwiJ3QgICIsInRhICAiLCJrYSBvICAiLCJtbyAiXSxbImkgdG8gICIsInNoaSAgIiwia3UgICIsInRlICAiLCJzaGkga2EgICIsInRhICAiLCJuYSAgIiwia2EgICIsInRzdSAgIiwidGEgICIsInlvICJdLFsia2kgbWkgICIsIm5vICAiLCJrbyB0byAgIiwiZ2EgICIsInN1ICAiLCJraSAgIiwiZGEgICIsInlvICJdLFsia28gICIsInJlICAiLCJrYSAgIiwicmEgICIsIm1vICJdLFsienUgICIsInR0byAgIiwiICAiLCJraSBtaSAgIiwid28gICIsImRhICAiLCJraSAgIiwic2hpICAiLCJtZSAgIiwidGEgICIsImkgIl0sWyJraSBtaSAgIiwid28gICIsInRzdSB5byAgIiwia3UgICIsImRhICAiLCJraSAgIiwic2hpICAiLCJtZSAgIiwidGEgICIsImkgIl1dLCJ0eXBlIjowfV0sInZlcnNpb24iOjF9]
+            [0,1168]<0,116,0>高<116,116,0>橋<232,116,0>優 <348,116,0>- <464,116,0>ヤ<580,116,0>キ<696,116,0>モ<812,116,0>チ <928,116,0>(吃<1044,116,0>醋)
+            [1168,707]<202,76,0>词<177,76,0>：<354,101,0>高<455,100,0>橋<555,152,0>優
+            [1875,810]<101,51,0>曲<101,51,0>：<202,152,0>高<355,152,0>橋<507,303,0>優
+            [25573,5862]<0,706,0>君<706,608,0>が<1314,555,0>前<1869,406,0>に<2275,505,0>付<2780,352,0>き<3132,303,0>合<3435,303,0>っ<3738,205,0>て<3943,455,0>い<4398,252,0>た<4650,302,0>人<4952,152,0>の<5104,303,0>こ<5407,455,0>と
+            [31637,5705]<0,858,0>僕<858,554,0>に<1412,253,0>打<1665,404,0>ち<2069,403,0>明<2472,354,0>け<2826,406,0>て<3232,556,0>く<3788,203,0>れ<3991,402,0>た<4393,353,0>と<4746,959,0>き
+            [37998,5151]<0,555,0>素<555,655,0>直<1210,354,0>に<1564,405,0>聴<1969,302,0>い<2271,404,0>て<2675,454,0>あ<3129,505,0>げ<3634,303,0>ら<3937,304,0>れ<4241,404,0>ず<4645,506,0>に
+        "#;
 
-        for (i, line) in parsed_data.lines.iter().take(10).enumerate() {
-            let line_preview = line
-                .line_text
-                .as_deref()
-                .unwrap_or("")
-                .chars()
-                .collect::<String>();
-            if !line.translations.is_empty() {
-                println!(
-                    "第 {} 行 ('{}'): 翻译 -> '{}'",
-                    i + 1,
-                    line_preview,
-                    line.translations[0].text
-                );
-            } else {
-                println!("第 {} 行 ('{}'): 无翻译", i + 1, line_preview);
-            }
-        }
+        let parsed_data = parse_krc(KRC_WITH_ROMANIZATION).expect("解析KRC文件失败");
 
-        assert!(!parsed_data.lines.is_empty(), "至少应该解析出一行歌词");
+        let target_line = parsed_data
+            .lines
+            .iter()
+            .find(|line| !line.translations.is_empty())
+            .unwrap();
+
+        assert_eq!(target_line.translations.len(), 1);
+        let translation = &target_line.translations[0];
+        assert_eq!(translation.text, "关于你曾交往过的那个人");
+
+        assert_eq!(target_line.romanizations.len(), 1);
+        let romanization = &target_line.romanizations[0];
+        assert_eq!(
+            romanization.text,
+            "ki mi ga ma e ni tsu ki a 't te i ta hi to no ko to"
+        );
     }
 }
