@@ -61,7 +61,7 @@ static METADATA_TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// # 返回
 /// `true` - 如果该行是有效的元数据标签并已处理。
 /// `false` - 如果该行不是元数据标签。
-pub fn parse_and_store_metadata(
+pub(crate) fn parse_and_store_metadata(
     line: &str,
     raw_metadata: &mut HashMap<String, Vec<String>>,
 ) -> bool {
@@ -92,7 +92,7 @@ pub fn parse_and_store_metadata(
 ///   去除了所有前后空格的纯净文本，第二个元素是一个布尔值，代表这个纯净文本在原始文本中
 ///   是否有尾随空格。
 /// * `None` - 如果原始文本只包含空格，意味着它已被作为前一个音节的尾随空格处理完毕。
-pub fn process_syllable_text(
+pub(crate) fn process_syllable_text(
     raw_text_slice: &str,
     syllables: &mut [LyricSyllable],
 ) -> Option<(String, bool)> {
@@ -112,7 +112,7 @@ pub fn process_syllable_text(
 }
 
 /// 规范化文本中的空白字符
-pub fn normalize_text_whitespace(text: &str) -> String {
+pub(crate) fn normalize_text_whitespace(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return String::new();
