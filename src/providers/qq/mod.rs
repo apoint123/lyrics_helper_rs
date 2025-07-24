@@ -13,7 +13,7 @@ use fancy_regex::Regex;
 
 use reqwest::Client;
 use serde_json::json;
-use tracing::{info, trace, warn};
+use tracing::{info, trace};
 use uuid::Uuid;
 
 use crate::{
@@ -131,16 +131,8 @@ impl Provider for QQMusic {
             let song_list = body.item_song;
 
             let process_song = |s: &models::Song| -> Option<SearchResult> {
-                let provider_id_json = match serde_json::to_string(s) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        warn!("序列化 QQ 音乐 Song 对象失败: {}，歌曲 MID: {}", e, s.mid);
-                        return None;
-                    }
-                };
-
                 let mut search_result = SearchResult::from(s);
-                search_result.provider_id = provider_id_json;
+                search_result.provider_id = s.mid.clone();
                 search_result.provider_name = self.name().to_string();
                 Some(search_result)
             };

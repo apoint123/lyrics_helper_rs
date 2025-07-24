@@ -15,7 +15,7 @@ use base64::Engine;
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use regex::Regex;
-use reqwest::Client as ReqwestClient;
+// use reqwest::Client as ReqwestClient;
 use serde::de::DeserializeOwned;
 use sha2::Sha256;
 use tracing::{debug, error, info, instrument, trace, warn};
@@ -51,8 +51,8 @@ static SECRET_RE: LazyLock<Regex> =
 #[derive(Debug, Clone)]
 pub struct MusixmatchClient {
     secret_key: Arc<OnceLock<String>>,
-    wreq_client: WreqClient,       // 用于大部分 API
-    reqwest_client: ReqwestClient, // 用于 richsync API
+    wreq_client: WreqClient, // 用于大部分 API
+                             // reqwest_client: ReqwestClient, // 用于 richsync API
 }
 
 impl Default for MusixmatchClient {
@@ -62,17 +62,12 @@ impl Default for MusixmatchClient {
 }
 
 fn to_generic_song(track_data: &models::Track) -> generic::Song {
-    let cover_url = if !track_data.album_coverart_800x800.is_empty() {
-        Some(track_data.album_coverart_800x800.clone())
-    } else if !track_data.album_coverart_500x500.is_empty() {
-        Some(track_data.album_coverart_500x500.clone())
-    } else if !track_data.album_coverart_350x350.is_empty() {
-        Some(track_data.album_coverart_350x350.clone())
-    } else if !track_data.album_coverart_100x100.is_empty() {
-        Some(track_data.album_coverart_100x100.clone())
-    } else {
-        None
-    };
+    let cover_url = find_best_cover_url(&[
+        &track_data.album_coverart_800x800,
+        &track_data.album_coverart_500x500,
+        &track_data.album_coverart_350x350,
+        &track_data.album_coverart_100x100,
+    ]);
 
     generic::Song {
         id: track_data.commontrack_id.to_string(),
@@ -101,13 +96,15 @@ impl MusixmatchClient {
             .build()
             .unwrap();
 
-        // 然而，逐字歌词接口只能用普通的 reqwest 客户端
-        let reqwest_client = ReqwestClient::new();
+        // 逐字接口现在又需要 TLS 指纹伪装了，先暂时注释掉吧
+        // 如果之后又需要普通的 reqwest 客户端，在取消注释
+        // // 然而，逐字歌词接口只能用普通的 reqwest 客户端
+        // let reqwest_client = ReqwestClient::new();
 
         Self {
             secret_key: Arc::new(Default::default()),
             wreq_client,
-            reqwest_client,
+            // reqwest_client,
         }
     }
 
@@ -184,8 +181,10 @@ impl MusixmatchClient {
             let secret = self.fetch_secret_key().await?;
             let _ = self.secret_key.set(secret);
         }
-        // unwrap 是安全的，因为刚刚保证了值一定已被设置
-        let secret = self.secret_key.get().unwrap();
+        let secret = self.secret_key.get().ok_or_else(|| {
+            // 理论上不会发生
+            LyricsHelperError::ApiError("内部错误：Secret key 未初始化".to_string())
+        })?;
 
         let base_request_url = format!("{BASE_URL}/{method}?app_id={APP_ID}&format=json&{params}");
 
@@ -196,15 +195,16 @@ impl MusixmatchClient {
 
         trace!(final_url = %final_url, "发送最终的 Musixmatch 请求");
 
+        #[allow(clippy::match_single_binding)]
         let resp_text = match method {
-            "track.richsync.get" => {
-                self.reqwest_client
-                    .get(&final_url)
-                    .send()
-                    .await?
-                    .text()
-                    .await?
-            }
+            // "track.richsync.get" => {
+            //     self.reqwest_client
+            //         .get(&final_url)
+            //         .send()
+            //         .await?
+            //         .text()
+            //         .await?
+            // }
             _ => {
                 self.wreq_client
                     .get(&final_url)
@@ -454,17 +454,12 @@ impl Provider for MusixmatchClient {
             .await?;
 
         if let Some(album_data) = result.album {
-            let cover_url = if !album_data.album_coverart_800x800.is_empty() {
-                Some(album_data.album_coverart_800x800)
-            } else if !album_data.album_coverart_500x500.is_empty() {
-                Some(album_data.album_coverart_500x500)
-            } else if !album_data.album_coverart_350x350.is_empty() {
-                Some(album_data.album_coverart_350x350)
-            } else if !album_data.album_coverart_100x100.is_empty() {
-                Some(album_data.album_coverart_100x100)
-            } else {
-                None
-            };
+            let cover_url = find_best_cover_url(&[
+                &album_data.album_coverart_800x800,
+                &album_data.album_coverart_500x500,
+                &album_data.album_coverart_350x350,
+                &album_data.album_coverart_100x100,
+            ]);
 
             Ok(generic::Album {
                 id: album_data.album_id.to_string(),
@@ -568,6 +563,13 @@ async fn get_lrc_input(client: &MusixmatchClient, id: &str) -> Result<InputFile>
         language: None,
         filename: None,
     })
+}
+
+fn find_best_cover_url(covers: &[&str]) -> Option<String> {
+    covers
+        .iter()
+        .find(|url| !url.is_empty())
+        .map(|url| (*url).to_string())
 }
 
 #[cfg(test)]

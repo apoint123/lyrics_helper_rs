@@ -328,14 +328,13 @@ pub fn parse_ttml(
             }
         };
 
-        if let Event::Text(e) = &event {
-            if state.format_detection == FormatDetection::Undetermined {
-                if let Ok(text) = e.decode() {
-                    if text.contains('\n') && text.trim().is_empty() {
-                        state.whitespace_nodes_with_newline += 1;
-                    }
-                }
-            }
+        if let Event::Text(e) = &event
+            && state.format_detection == FormatDetection::Undetermined
+            && let Ok(text) = e.decode()
+            && text.contains('\n')
+            && text.trim().is_empty()
+        {
+            state.whitespace_nodes_with_newline += 1;
         }
 
         if let Event::Start(e) = &event
@@ -681,12 +680,8 @@ fn process_text_event(e_text: &BytesText, state: &mut TtmlParserState) -> Result
         && !text_slice.is_empty()
         && text_slice.chars().all(char::is_whitespace)
     {
-        let mut has_space = false;
-        if state.format_detection == FormatDetection::NotFormatted {
-            has_space = true;
-        } else if !text_slice.contains('\n') && !text_slice.contains('\r') {
-            has_space = true;
-        }
+        let has_space = state.format_detection == FormatDetection::NotFormatted
+            || (!text_slice.contains('\n') && !text_slice.contains('\r'));
 
         if has_space && let Some(p_data) = state.body_state.current_p_element_data.as_mut() {
             // 根据上一个音节是否是背景人声，找到正确的音节列表

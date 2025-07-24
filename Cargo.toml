@@ -7,7 +7,7 @@ description = "一个功能强大且可扩展的 Rust 歌词处理工具库。"
 readme = "README.md"
 homepage = "https://github.com/apoint123/lyrics-helper-rs"
 repository = "https://github.com/apoint123/lyrics-helper-rs"
-license = "MIT and Apache-2.0"
+license = "MIT"
 keywords = ["lyrics", "lrc", "parser", "converter", "async"]
 categories = [
     "multimedia::audio",
