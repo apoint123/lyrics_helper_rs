@@ -3,8 +3,9 @@
 //! 该解析器设计上仅用于生成 Apple Music 和 AMLL 使用的 TTML 歌词文件，
 //! 无法用于生成通用的 TTML 字幕文件。
 
-use std::{collections::HashMap, io::Cursor};
+use std::{collections::HashMap, io::Cursor, sync::LazyLock};
 
+use hyphenation::{Hyphenator, Language, Load, Standard};
 use quick_xml::{
     Writer,
     events::{BytesText, Event},
@@ -19,6 +20,12 @@ use crate::converter::{
     },
     utils::normalize_text_whitespace,
 };
+
+static ENGLISH_HYPHENATOR: LazyLock<Standard> = LazyLock::new(|| {
+    // 从嵌入的资源中加载美式英语词典
+    Standard::from_embedded(Language::EnglishUS)
+        .expect("Failed to load embedded English hyphenation dictionary.")
+});
 
 /// 将毫秒时间戳格式化为 TTML 标准的时间字符串。
 /// 例如：123456ms -> "2:03.456"
@@ -771,15 +778,40 @@ fn auto_tokenize(text: &str) -> Vec<String> {
             );
 
             if should_break && !current_token.is_empty() {
-                tokens.push(current_token);
+                // 如果刚刚结束的 token 是一个拉丁词，并且长度大于1，就尝试按音节拆分
+                if last_type == CharType::Latin && current_token.chars().count() > 1 {
+                    // 拆分为多个部分
+                    tokens.extend(
+                        ENGLISH_HYPHENATOR
+                            .hyphenate(&current_token)
+                            .into_iter()
+                            .segments()
+                            .map(String::from),
+                    );
+                } else {
+                    // 对于非拉丁词（如数字、单个字符）或未拆分的词，直接推入
+                    tokens.push(current_token);
+                }
                 current_token = String::new();
             }
         }
         current_token.push_str(grapheme);
         last_char_type = Some(current_char_type);
     }
+
+    // 处理循环结束后的最后一个 token
     if !current_token.is_empty() {
-        tokens.push(current_token);
+        if last_char_type == Some(CharType::Latin) && current_token.chars().count() > 1 {
+            tokens.extend(
+                ENGLISH_HYPHENATOR
+                    .hyphenate(&current_token)
+                    .into_iter()
+                    .segments()
+                    .map(String::from),
+            );
+        } else {
+            tokens.push(current_token);
+        }
     }
     tokens
 }
@@ -815,6 +847,19 @@ mod tests {
             vec![
                 "OK", ",", " ", "Let", "'", "s", " ", "GO", "!", " ", "走", "吧", "123"
             ]
+        );
+    }
+
+    #[test]
+    fn test_auto_tokenize_with_syllables() {
+        assert_eq!(
+            auto_tokenize("hyphenation"),
+            vec!["hy", "phen", "a", "tion"]
+        );
+        assert_eq!(auto_tokenize("Amazing!"), vec!["Amaz", "ing", "!",]);
+        assert_eq!(
+            auto_tokenize("wonderful世界"),
+            vec!["won", "der", "ful", "世", "界"]
         );
     }
 }

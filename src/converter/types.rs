@@ -659,6 +659,18 @@ pub enum TtmlTimingMode {
     Line,
 }
 
+/// TTML 解析选项
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TtmlParsingOptions {
+    /// 当TTML本身未指定语言时，解析器可以使用的默认语言。
+    #[serde(default)]
+    pub default_languages: DefaultLanguageOptions,
+
+    /// 强制指定计时模式，忽略文件内的 `itunes:timing` 属性和自动检测逻辑。
+    #[serde(default)]
+    pub force_timing_mode: Option<TtmlTimingMode>,
+}
+
 /// TTML 生成选项
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TtmlGenerationOptions {

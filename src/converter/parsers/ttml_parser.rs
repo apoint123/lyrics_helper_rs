@@ -14,12 +14,9 @@ use quick_xml::{
 use serde::Deserialize;
 use tracing::{error, warn};
 
-use crate::converter::{
-    LyricFormat,
-    types::{
-        BackgroundSection, ConvertError, DefaultLanguageOptions, LyricLine, LyricSyllable,
-        ParsedSourceData, RomanizationEntry, TranslationEntry,
-    },
+use crate::converter::types::{
+    BackgroundSection, ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData,
+    RomanizationEntry, TranslationEntry, TtmlParsingOptions, TtmlTimingMode,
 };
 
 // =================================================================================
@@ -264,7 +261,7 @@ struct ItunesTranslationText {
 /// * `Err(ConvertError)` - 解析失败时，返回具体的错误信息。
 pub fn parse_ttml(
     content: &str,
-    default_languages: &DefaultLanguageOptions,
+    options: &TtmlParsingOptions,
 ) -> Result<ParsedSourceData, ConvertError> {
     // 预扫描以确定是否存在带时间的span，辅助判断计时模式
     let has_timed_span_tags = content.contains("<span") && content.contains("begin=");
@@ -283,9 +280,9 @@ pub fn parse_ttml(
 
     // 初始化解析状态机
     let mut state = TtmlParserState {
-        default_main_lang: default_languages.main.clone(),
-        default_translation_lang: default_languages.translation.clone(),
-        default_romanization_lang: default_languages.romanization.clone(),
+        default_main_lang: options.default_languages.main.clone(),
+        default_translation_lang: options.default_languages.translation.clone(),
+        default_romanization_lang: options.default_languages.romanization.clone(),
         ..Default::default()
     };
     let mut buf = Vec::new();
@@ -376,6 +373,7 @@ pub fn parse_ttml(
                 &mut raw_metadata,
                 &mut warnings,
                 has_timed_span_tags,
+                options,
             )?;
         }
 
@@ -407,6 +405,7 @@ fn handle_global_event<'a>(
     raw_metadata: &mut HashMap<String, Vec<String>>,
     warnings: &mut Vec<String>,
     has_timed_span_tags: bool,
+    options: &TtmlParsingOptions,
 ) -> Result<(), ConvertError> {
     match event {
         Event::Start(e) => match e.local_name().as_ref() {
@@ -417,7 +416,9 @@ fn handle_global_event<'a>(
                 reader,
                 has_timed_span_tags,
                 warnings,
+                options,
             )?,
+
             TAG_BODY => state.body_state.in_body = true,
             TAG_DIV if state.body_state.in_body => {
                 state.body_state.in_div = true;
@@ -435,40 +436,12 @@ fn handle_global_event<'a>(
                 state.body_state.in_p = true;
 
                 // 获取 p 标签的各个属性
-                let start_ms = e
-                    .try_get_attribute(ATTR_BEGIN)?
-                    .map(|a| parse_ttml_time_to_ms(&a.decode_and_unescape_value(reader.decoder())?))
-                    .transpose()?
-                    .unwrap_or(0);
-
-                let end_ms = e
-                    .try_get_attribute(ATTR_END)?
-                    .map(|a| parse_ttml_time_to_ms(&a.decode_and_unescape_value(reader.decoder())?))
-                    .transpose()?
-                    .unwrap_or(0);
-
-                let agent = e
-                    .try_get_attribute(ATTR_AGENT)?
-                    .or(e.try_get_attribute(ATTR_AGENT_ALIAS)?)
-                    .map(|a| -> Result<String, ConvertError> {
-                        Ok(a.decode_and_unescape_value(reader.decoder())?.into_owned())
-                    })
-                    .transpose()?;
-
-                let song_part = e
-                    .try_get_attribute(ATTR_ITUNES_SONG_PART)?
-                    .map(|a| -> Result<String, ConvertError> {
-                        Ok(a.decode_and_unescape_value(reader.decoder())?.into_owned())
-                    })
-                    .transpose()?
+                let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN])?.unwrap_or(0);
+                let end_ms = get_time_attribute(e, reader, &[ATTR_END])?.unwrap_or(0);
+                let agent = get_string_attribute(e, reader, &[ATTR_AGENT, ATTR_AGENT_ALIAS])?;
+                let song_part = get_string_attribute(e, reader, &[ATTR_ITUNES_SONG_PART])?
                     .or(state.body_state.current_div_song_part.clone());
-
-                let itunes_key = e
-                    .try_get_attribute(ATTR_ITUNES_KEY)?
-                    .map(|a| -> Result<String, ConvertError> {
-                        Ok(a.decode_and_unescape_value(reader.decoder())?.into_owned())
-                    })
-                    .transpose()?;
+                let itunes_key = get_string_attribute(e, reader, &[ATTR_ITUNES_KEY])?;
 
                 // 创建 p 元素数据容器
                 state.body_state.current_p_element_data = Some(CurrentPElementData {
@@ -606,20 +579,24 @@ fn process_tt_start(
     reader: &Reader<&[u8]>,
     has_timed_span_tags: bool,
     warnings: &mut Vec<String>,
+    options: &TtmlParsingOptions,
 ) -> Result<(), ConvertError> {
-    // 获取 itunes:timing 属性
-    let timing_attr = e.try_get_attribute(ATTR_ITUNES_TIMING)?;
-    if let Some(attr) = timing_attr {
-        if attr.value.as_ref() == b"line" {
+    if let Some(forced_mode) = options.force_timing_mode {
+        state.is_line_timing_mode = forced_mode == TtmlTimingMode::Line;
+    } else {
+        let timing_attr = e.try_get_attribute(ATTR_ITUNES_TIMING)?;
+        if let Some(attr) = timing_attr {
+            if attr.value.as_ref() == b"line" {
+                state.is_line_timing_mode = true;
+            }
+        } else if !has_timed_span_tags {
             state.is_line_timing_mode = true;
+            state.detected_line_mode = true;
+            warnings.push(
+                "未找到带时间戳的 <span> 标签且未指定 itunes:timing 模式，切换到逐行歌词模式。"
+                    .to_string(),
+            );
         }
-    } else if !has_timed_span_tags {
-        state.is_line_timing_mode = true;
-        state.detected_line_mode = true;
-        warnings.push(
-            "未找到带时间戳的 <span> 标签且未指定 itunes:timing 模式，切换到逐行歌词模式。"
-                .to_string(),
-        );
     }
 
     // 获取 xml:lang 属性
@@ -651,40 +628,20 @@ fn process_span_start(
     state.text_buffer.clear();
 
     // 获取 span 的各个属性
-    let role = e
-        .try_get_attribute(ATTR_ROLE)?
-        .or(e.try_get_attribute(ATTR_ROLE_ALIAS)?)
-        .map(|attr| match attr.value.as_ref() {
+    let role = get_attribute_with_aliases(e, reader, &[ATTR_ROLE, ATTR_ROLE_ALIAS], |s| {
+        Ok(match s.as_bytes() {
             ROLE_TRANSLATION => SpanRole::Translation,
             ROLE_ROMANIZATION => SpanRole::Romanization,
             ROLE_BACKGROUND => SpanRole::Background,
             _ => SpanRole::Generic,
         })
-        .unwrap_or(SpanRole::Generic);
+    })?
+    .unwrap_or(SpanRole::Generic);
 
-    let lang = e
-        .try_get_attribute(ATTR_XML_LANG)?
-        .map(|a| -> Result<String, ConvertError> {
-            Ok(a.decode_and_unescape_value(reader.decoder())?.into_owned())
-        })
-        .transpose()?;
-
-    let scheme = e
-        .try_get_attribute(ATTR_XML_SCHEME)?
-        .map(|a| -> Result<String, ConvertError> {
-            Ok(a.decode_and_unescape_value(reader.decoder())?.into_owned())
-        })
-        .transpose()?;
-
-    let start_ms = e
-        .try_get_attribute(ATTR_BEGIN)?
-        .map(|a| parse_ttml_time_to_ms(&a.decode_and_unescape_value(reader.decoder())?))
-        .transpose()?;
-
-    let end_ms = e
-        .try_get_attribute(ATTR_END)?
-        .map(|a| parse_ttml_time_to_ms(&a.decode_and_unescape_value(reader.decoder())?))
-        .transpose()?;
+    let lang = get_string_attribute(e, reader, &[ATTR_XML_LANG])?;
+    let scheme = get_string_attribute(e, reader, &[ATTR_XML_SCHEME])?;
+    let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN])?;
+    let end_ms = get_time_attribute(e, reader, &[ATTR_END])?;
 
     // 将解析出的上下文压入堆栈，以支持嵌套 span
     state.body_state.span_stack.push(SpanContext {
@@ -1460,6 +1417,59 @@ fn process_deserialized_metadata(
                 .push(state.text_processing_buffer.clone());
         }
     }
+}
+
+/// 从给定的属性名列表中获取第一个找到的属性，并将其转换为目标类型。
+///
+/// # 参数
+/// * `e` - `BytesStart` 事件，代表一个 XML 标签的开始。
+/// * `reader` - XML 读取器，用于解码。
+/// * `attr_names` - 一个字节切片数组，包含所有要尝试的属性名（包括别名）。
+/// * `processor` - 一个闭包，接收解码后的字符串值，并返回 `Result<T, ConvertError>`。
+///
+/// # 返回
+/// * `Result<Option<T>, ConvertError>` - 成功时返回一个包含转换后值的 Option，如果找不到任何属性则返回 `None`。
+fn get_attribute_with_aliases<T, F>(
+    e: &BytesStart,
+    reader: &Reader<&[u8]>,
+    attr_names: &[&[u8]],
+    processor: F,
+) -> Result<Option<T>, ConvertError>
+where
+    F: Fn(&str) -> Result<T, ConvertError>,
+{
+    let mut found_attr = None;
+    for &name in attr_names {
+        if let Some(attr) = e.try_get_attribute(name)? {
+            found_attr = Some(attr);
+            break;
+        }
+    }
+
+    found_attr
+        .map(|attr| {
+            let decoded_value = attr.decode_and_unescape_value(reader.decoder())?;
+            processor(&decoded_value)
+        })
+        .transpose()
+}
+
+/// 获取字符串类型的属性值。
+fn get_string_attribute(
+    e: &BytesStart,
+    reader: &Reader<&[u8]>,
+    attr_names: &[&[u8]],
+) -> Result<Option<String>, ConvertError> {
+    get_attribute_with_aliases(e, reader, attr_names, |s| Ok(s.to_owned()))
+}
+
+/// 获取并解析为毫秒的时间戳属性值。
+fn get_time_attribute(
+    e: &BytesStart,
+    reader: &Reader<&[u8]>,
+    attr_names: &[&[u8]],
+) -> Result<Option<u64>, ConvertError> {
+    get_attribute_with_aliases(e, reader, attr_names, parse_ttml_time_to_ms)
 }
 
 #[cfg(test)]

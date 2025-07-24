@@ -2,7 +2,7 @@ use lyrics_helper_rs::converter::{
     generators::ttml_generator::generate_ttml,
     parsers::ttml_parser::parse_ttml,
     processors::metadata_processor::MetadataStore,
-    types::{DefaultLanguageOptions, TtmlGenerationOptions, TtmlTimingMode},
+    types::{TtmlGenerationOptions, TtmlParsingOptions, TtmlTimingMode},
 };
 
 use std::path::Path;
@@ -16,7 +16,7 @@ fn load_test_data(filename: &str) -> String {
 #[test]
 fn test_parse_line_timed_basic() {
     let content = load_test_data("line_timed_basic.ttml");
-    let result = parse_ttml(&content, &DefaultLanguageOptions::default()).unwrap();
+    let result = parse_ttml(&content, &TtmlParsingOptions::default()).unwrap();
 
     assert!(result.is_line_timed_source, "应该检测到逐行歌词");
 
@@ -31,7 +31,7 @@ fn test_parse_line_timed_basic() {
 #[test]
 fn test_parse_word_timed_basic() {
     let content = load_test_data("word_timed_basic.ttml");
-    let result = parse_ttml(&content, &DefaultLanguageOptions::default()).unwrap();
+    let result = parse_ttml(&content, &TtmlParsingOptions::default()).unwrap();
 
     assert!(!result.is_line_timed_source, "应该检测到逐字歌词");
     assert_eq!(result.lines.len(), 1);
@@ -55,7 +55,7 @@ fn test_parse_word_timed_basic() {
 #[test]
 fn test_metadata_extraction() {
     let content = load_test_data("full_metadata.ttml");
-    let result = parse_ttml(&content, &DefaultLanguageOptions::default()).unwrap();
+    let result = parse_ttml(&content, &TtmlParsingOptions::default()).unwrap();
 
     let metadata = &result.raw_metadata;
 
@@ -82,7 +82,7 @@ fn test_metadata_extraction() {
 #[test]
 fn test_parse_word_timed_with_background() {
     let content = load_test_data("background_vocals.ttml");
-    let result = parse_ttml(&content, &DefaultLanguageOptions::default()).unwrap();
+    let result = parse_ttml(&content, &TtmlParsingOptions::default()).unwrap();
 
     assert!(!result.is_line_timed_source);
 
@@ -104,7 +104,7 @@ fn test_parse_word_timed_with_background() {
 #[test]
 fn test_warning_generation_for_recoverable_issues() {
     let content = load_test_data("malformed_but_recoverable.ttml");
-    let result = parse_ttml(&content, &DefaultLanguageOptions::default()).unwrap();
+    let result = parse_ttml(&content, &TtmlParsingOptions::default()).unwrap();
 
     assert!(!result.warnings.is_empty(), "应该产生警告");
 
@@ -122,7 +122,7 @@ fn test_warning_generation_for_recoverable_issues() {
 #[test]
 fn test_round_trip() {
     let content = load_test_data("real_world.ttml");
-    let parsed_data = parse_ttml(&content, &DefaultLanguageOptions::default()).unwrap();
+    let parsed_data = parse_ttml(&content, &TtmlParsingOptions::default()).unwrap();
 
     let mut metadata_store = MetadataStore::new();
     for (raw_key, values) in &parsed_data.raw_metadata {
@@ -145,6 +145,98 @@ fn test_round_trip() {
         generate_ttml(&parsed_data.lines, &metadata_store, &options).unwrap();
 
     insta::assert_snapshot!(generated_ttml_output);
+}
+
+#[test]
+fn test_parse_formatted_ttml() {
+    // 格式化TTML，<span>之间只有换行符。预期：无空格。
+    let formatted_no_space_content = r#"
+<tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions">
+  <body>
+    <p begin="0s" end="2s">
+      <span begin="0s" end="1s">Hello</span>
+      <span begin="1s" end="2s">World</span>
+    </p>
+  </body>
+</tt>
+"#;
+    let result1 = parse_ttml(formatted_no_space_content, &TtmlParsingOptions::default()).unwrap();
+
+    assert!(
+        result1.detected_formatted_ttml_input.unwrap_or(false),
+        "场景1: 应该检测到格式化输入"
+    );
+    let line1 = &result1.lines[0];
+    assert_eq!(line1.main_syllables.len(), 2);
+    assert!(
+        !line1.main_syllables[0].ends_with_space,
+        "场景1: 'Hello' 后面不应该有空格"
+    );
+
+    // 格式化TTML，<span>之间有一个明确的空格。预期：有空格。
+    let formatted_with_space_content = r#"
+<tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions">
+  <body>
+    <p begin="0s" end="2s">
+      <span begin="0s" end="1s">Hello</span> <span begin="1s" end="2s">World</span>
+    </p>
+  </body>
+</tt>
+"#;
+    let result2 = parse_ttml(formatted_with_space_content, &TtmlParsingOptions::default()).unwrap();
+
+    assert!(
+        result2.detected_formatted_ttml_input.unwrap_or(false),
+        "场景2: 应该检测到格式化输入"
+    );
+    let line2 = &result2.lines[0];
+    assert!(
+        line2.main_syllables[0].ends_with_space,
+        "场景2: 'Hello' 后面应该有空格"
+    );
+
+    // 未格式化的TTML，<span>之间有空格。预期：有空格。
+    let unformatted_with_space_content = r#"<tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions"><body><p begin="0s" end="2s"><span begin="0s" end="1s">Hello</span> <span begin="1s" end="2s">World</span></p></body></tt>"#;
+    let result3 = parse_ttml(
+        unformatted_with_space_content,
+        &TtmlParsingOptions::default(),
+    )
+    .unwrap();
+
+    let line3 = &result3.lines[0];
+    assert!(
+        line3.main_syllables[0].ends_with_space,
+        "场景3: 在未格式化输入中，'Hello' 后面应该有空格"
+    );
+
+    // 混合了紧邻和非紧邻<span>的格式化文件。预期：精确识别空格。
+    let mixed_formatted_content = r#"
+<tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions">
+  <body>
+    <p begin="31s" end="36s">
+      <span begin="31s" end="32s">1</span
+      ><span begin="32s" end="33s">2</span>
+      <span begin="34s" end="35s">3</span>
+    </p>
+  </body>
+</tt>
+"#;
+    let result4 = parse_ttml(mixed_formatted_content, &TtmlParsingOptions::default()).unwrap();
+
+    assert!(
+        result4.detected_formatted_ttml_input.unwrap_or(false),
+        "场景4: 应该检测到格式化输入"
+    );
+    let line4 = &result4.lines[0];
+    assert_eq!(line4.main_syllables.len(), 3);
+    assert!(
+        !line4.main_syllables[0].ends_with_space,
+        "场景4: '1' 后面不应该有空格 (紧邻)"
+    );
+    assert!(
+        !line4.main_syllables[1].ends_with_space,
+        "场景4: '2' 后面不应该有空格 (换行分隔)"
+    );
 }
 
 // 暂时不运行这个测试，因为格式错误也能继续解析

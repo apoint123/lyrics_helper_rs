@@ -42,6 +42,7 @@ futures = "0.3.31"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 hex = "0.4.3"
 hmac = "0.12.1"
+hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
 js-sys = "0.3.77"
 md-5 = "0.10.6"
 num-bigint = "0.4.6"
@@ -100,10 +101,3 @@ harness = false
 [[bench]]
 name = "ttml_parser_benchmark"
 harness = false
-
-[profile.release]
-debug = true
-
-[profile.dev]
-debug = true
-overflow-checks = true

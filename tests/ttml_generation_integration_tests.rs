@@ -1,10 +1,8 @@
 use lyrics_helper_rs::converter::{
     generators::ttml_generator::generate_ttml,
-    parsers::ttml_parser::parse_ttml,
     processors::metadata_processor::MetadataStore,
     types::{
-        CanonicalMetadataKey, DefaultLanguageOptions, LyricLine, LyricSyllable,
-        TtmlGenerationOptions, TtmlTimingMode,
+        CanonicalMetadataKey, LyricLine, LyricSyllable, TtmlGenerationOptions, TtmlTimingMode,
     },
 };
 
@@ -136,104 +134,4 @@ fn test_auto_word_splitting_snapshot() {
     let ttml_output = generate_ttml(&lines, &Default::default(), &options).unwrap();
 
     insta::assert_snapshot!(ttml_output);
-}
-
-#[test]
-fn test_parse_formatted_ttml() {
-    // 格式化TTML，<span>之间只有换行符。预期：无空格。
-    let formatted_no_space_content = r#"
-<tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions">
-  <body>
-    <p begin="0s" end="2s">
-      <span begin="0s" end="1s">Hello</span>
-      <span begin="1s" end="2s">World</span>
-    </p>
-  </body>
-</tt>
-"#;
-    let result1 = parse_ttml(
-        formatted_no_space_content,
-        &DefaultLanguageOptions::default(),
-    )
-    .unwrap();
-
-    assert!(
-        result1.detected_formatted_ttml_input.unwrap_or(false),
-        "场景1: 应该检测到格式化输入"
-    );
-    let line1 = &result1.lines[0];
-    assert_eq!(line1.main_syllables.len(), 2);
-    assert!(
-        !line1.main_syllables[0].ends_with_space,
-        "场景1: 'Hello' 后面不应该有空格"
-    );
-
-    // 格式化TTML，<span>之间有一个明确的空格。预期：有空格。
-    let formatted_with_space_content = r#"
-<tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions">
-  <body>
-    <p begin="0s" end="2s">
-      <span begin="0s" end="1s">Hello</span> <span begin="1s" end="2s">World</span>
-    </p>
-  </body>
-</tt>
-"#;
-    let result2 = parse_ttml(
-        formatted_with_space_content,
-        &DefaultLanguageOptions::default(),
-    )
-    .unwrap();
-
-    assert!(
-        result2.detected_formatted_ttml_input.unwrap_or(false),
-        "场景2: 应该检测到格式化输入"
-    );
-    let line2 = &result2.lines[0];
-    assert!(
-        line2.main_syllables[0].ends_with_space,
-        "场景2: 'Hello' 后面应该有空格"
-    );
-
-    // 未格式化的TTML，<span>之间有空格。预期：有空格。
-    let unformatted_with_space_content = r#"<tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions"><body><p begin="0s" end="2s"><span begin="0s" end="1s">Hello</span> <span begin="1s" end="2s">World</span></p></body></tt>"#;
-    let result3 = parse_ttml(
-        unformatted_with_space_content,
-        &DefaultLanguageOptions::default(),
-    )
-    .unwrap();
-
-    let line3 = &result3.lines[0];
-    assert!(
-        line3.main_syllables[0].ends_with_space,
-        "场景3: 在未格式化输入中，'Hello' 后面应该有空格"
-    );
-
-    // 混合了紧邻和非紧邻<span>的格式化文件。预期：精确识别空格。
-    let mixed_formatted_content = r#"
-<tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions">
-  <body>
-    <p begin="31s" end="36s">
-      <span begin="31s" end="32s">1</span
-      ><span begin="32s" end="33s">2</span>
-      <span begin="34s" end="35s">3</span>
-    </p>
-  </body>
-</tt>
-"#;
-    let result4 = parse_ttml(mixed_formatted_content, &DefaultLanguageOptions::default()).unwrap();
-
-    assert!(
-        result4.detected_formatted_ttml_input.unwrap_or(false),
-        "场景4: 应该检测到格式化输入"
-    );
-    let line4 = &result4.lines[0];
-    assert_eq!(line4.main_syllables.len(), 3);
-    assert!(
-        !line4.main_syllables[0].ends_with_space,
-        "场景4: '1' 后面不应该有空格 (紧邻)"
-    );
-    assert!(
-        !line4.main_syllables[1].ends_with_space,
-        "场景4: '2' 后面不应该有空格 (换行分隔)"
-    );
 }
