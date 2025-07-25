@@ -376,9 +376,10 @@ impl FromStr for CanonicalMetadataKey {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "title" | "musicname" => Ok(Self::Title),
-            "artist" | "artists" => Ok(Self::Artist),
-            "album" => Ok(Self::Album),
+            "ti" | "title" | "musicname" => Ok(Self::Title),
+            "ar" | "artist" | "artists" => Ok(Self::Artist),
+            "al" | "album" => Ok(Self::Album),
+            "by" | "ttmlauthorgithublogin" => Ok(Self::TtmlAuthorGithubLogin),
             "language" | "lang" => Ok(Self::Language),
             "offset" => Ok(Self::Offset),
             "songwriter" | "songwriters" => Ok(Self::Songwriter),
@@ -388,7 +389,6 @@ impl FromStr for CanonicalMetadataKey {
             "applemusicid" => Ok(Self::AppleMusicId),
             "isrc" => Ok(Self::Isrc),
             "ttmlauthorgithub" => Ok(Self::TtmlAuthorGithub),
-            "ttmlauthorgithublogin" => Ok(Self::TtmlAuthorGithubLogin),
             custom_key if !custom_key.is_empty() => Ok(Self::Custom(custom_key.to_string())),
             _ => Err(ParseCanonicalMetadataKeyError(s.to_string())),
         }

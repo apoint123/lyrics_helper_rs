@@ -86,17 +86,27 @@ pub fn convert_single_lyric(
     input: &ConversionInput,
     options: &ConversionOptions,
 ) -> Result<FullConversionResult, ConvertError> {
-    let source_data = parse_and_merge(input, options)?;
+    let mut source_data = parse_and_merge(input, options)?;
     let mut processed_data = source_data.clone();
 
     let mut metadata_store = MetadataStore::new();
-    for (key, values) in processed_data.raw_metadata.iter() {
-        for value in values {
-            if metadata_store.add(key, value.clone()).is_err() {
-                warn!(
-                    "元数据键 '{}' 无法被规范化，但其值 '{}' 仍被添加。",
-                    key, value
-                );
+
+    if let Some(overrides) = &input.user_metadata_overrides {
+        for (key, values) in overrides {
+            for value in values {
+                let _ = metadata_store.add(key, value.clone());
+            }
+        }
+        source_data.raw_metadata = overrides.clone();
+    } else {
+        for (key, values) in processed_data.raw_metadata.iter() {
+            for value in values {
+                if metadata_store.add(key, value.clone()).is_err() {
+                    warn!(
+                        "元数据键 '{}' 无法被规范化，但其值 '{}' 仍被添加。",
+                        key, value
+                    );
+                }
             }
         }
     }

@@ -142,6 +142,18 @@ impl MetadataStore {
         }
     }
 
+    /// 移除一个元数据键及其所有关联的值。
+    ///
+    /// # 参数
+    /// * `key_str` - 原始的元数据键名，例如 "ti", "artist"。
+    pub fn remove(&mut self, key_str: &str) {
+        let canonical_key = key_str
+            .parse::<CanonicalMetadataKey>()
+            .unwrap_or_else(|_| CanonicalMetadataKey::Custom(key_str.to_string()));
+
+        self.data.remove(&canonical_key);
+    }
+
     /// 生成通用的LRC元数据头部字符串。
     ///
     /// 包括：
