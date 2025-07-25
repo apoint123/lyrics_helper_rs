@@ -421,6 +421,8 @@ pub struct ParsedSourceData {
     /// 指示输入的TTML（来自`raw_ttml_from_input`）是否被格式化。
     /// 这影响空格和换行的处理。
     pub detected_formatted_ttml_input: Option<bool>,
+    /// 提供商名称
+    pub source_name: String,
 }
 
 //=============================================================================
@@ -643,8 +645,8 @@ pub struct ConversionInput {
     pub romanizations: Vec<InputFile>,
     /// 目标歌词格式。
     pub target_format: LyricFormat,
-    // /// 可选的用户指定的元数据覆盖（原始键值对）。
-    // pub user_metadata_overrides: Option<HashMap<String, Vec<String>>>,
+    /// 可选的用户指定的元数据覆盖（原始键值对）。
+    pub user_metadata_overrides: Option<HashMap<String, Vec<String>>>,
     // /// 可选的应用级别的固定元数据规则（原始键值对）。
     // pub fixed_metadata_rules: Option<HashMap<String, Vec<String>>>,
 }
@@ -901,6 +903,15 @@ pub enum ConversionResult {
     Single(String),
     /// 批量转换的结果，为所有任务的最终状态列表。
     Batch(Vec<BatchConversionConfig>),
+}
+
+/// 包含完整转换结果的结构体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullConversionResult {
+    /// 最终生成的歌词字符串。
+    pub output_lyrics: String,
+    /// 在转换开始时从输入解析出的源数据。
+    pub source_data: ParsedSourceData,
 }
 
 // =============================================================================

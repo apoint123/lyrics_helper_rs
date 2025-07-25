@@ -262,14 +262,17 @@ impl Provider for AmllTtmlDatabase {
             translations: vec![],
             romanizations: vec![],
             target_format: Default::default(),
+            user_metadata_overrides: None,
         };
 
-        let parsed_data = tokio::task::spawn_blocking(move || {
+        let mut parsed_data = tokio::task::spawn_blocking(move || {
             converter::parse_and_merge(&conversion_input, &Default::default())
         })
         .await
         .map_err(|e| LyricsHelperError::Parser(format!("TTML 解析失败: {e}")))?
         .map_err(|e| LyricsHelperError::Parser(e.to_string()))?;
+
+        parsed_data.source_name = "amll-ttml-database".to_string();
 
         let raw_lyrics = RawLyrics {
             format: "ttml".to_string(),

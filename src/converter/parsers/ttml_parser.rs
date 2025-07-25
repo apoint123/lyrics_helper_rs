@@ -388,6 +388,7 @@ pub fn parse_ttml(
         warnings,
         raw_ttml_from_input: Some(content.to_string()),
         detected_formatted_ttml_input: Some(state.format_detection == FormatDetection::IsFormatted),
+        ..Default::default()
     })
 }
 

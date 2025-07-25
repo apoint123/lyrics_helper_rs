@@ -212,10 +212,12 @@ pub fn execute_batch_conversion(
                 translations,
                 romanizations,
                 target_format: task.target_format,
+                user_metadata_overrides: None,
             };
 
             // 调用核心转换函数
             convert_single_lyric(&conversion_input, options)
+                .map(|full_result| full_result.output_lyrics)
         })();
 
         match conversion_result {

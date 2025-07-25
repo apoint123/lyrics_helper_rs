@@ -692,6 +692,7 @@ impl QQMusic {
             LyricFormat::Lrc
         } else {
             let mut parsed_data = crate::converter::types::ParsedSourceData::default();
+            parsed_data.source_name = "qq".to_string();
             parsed_data.raw_metadata.insert(
                 "introduction".to_string(),
                 vec![main_lyrics_decrypted.clone()],
@@ -741,8 +742,10 @@ impl QQMusic {
             translations,
             romanizations,
             target_format: LyricFormat::Lrc,
+            user_metadata_overrides: None,
         };
-        let parsed_data = converter::parse_and_merge(&conversion_input, &Default::default())?;
+        let mut parsed_data = converter::parse_and_merge(&conversion_input, &Default::default())?;
+        parsed_data.source_name = "qq".to_string();
 
         let raw_lyrics = RawLyrics {
             format: main_lyric_format.to_string(),

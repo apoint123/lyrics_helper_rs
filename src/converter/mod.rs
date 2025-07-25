@@ -17,7 +17,7 @@ use crate::converter::{
     },
     types::{
         ConversionInput, ConversionOptions, ConversionResult, ConversionTask, ConvertError,
-        InputFile, ParsedSourceData,
+        FullConversionResult, InputFile, ParsedSourceData,
     },
 };
 use tracing::{debug, warn};
@@ -43,8 +43,8 @@ pub fn process_conversion_task(
 ) -> Result<ConversionResult, ConvertError> {
     match task {
         ConversionTask::Single(input) => {
-            let result_string = convert_single_lyric(&input, options)?;
-            Ok(ConversionResult::Single(result_string))
+            let full_result = convert_single_lyric(&input, options)?;
+            Ok(ConversionResult::Single(full_result.output_lyrics))
         }
         ConversionTask::Batch(batch_input) => {
             let file_groups = batch_processor::discover_and_pair_files(&batch_input.input_dir)?;
@@ -85,11 +85,12 @@ pub fn process_conversion_task(
 pub fn convert_single_lyric(
     input: &ConversionInput,
     options: &ConversionOptions,
-) -> Result<String, ConvertError> {
-    let mut merged_data = parse_and_merge(input, options)?;
+) -> Result<FullConversionResult, ConvertError> {
+    let source_data = parse_and_merge(input, options)?;
+    let mut processed_data = source_data.clone();
 
     let mut metadata_store = MetadataStore::new();
-    for (key, values) in merged_data.raw_metadata.iter() {
+    for (key, values) in processed_data.raw_metadata.iter() {
         for value in values {
             if metadata_store.add(key, value.clone()).is_err() {
                 warn!(
@@ -102,63 +103,71 @@ pub fn convert_single_lyric(
     metadata_store.deduplicate_values();
 
     let chinese_processor = ChineseConversionProcessor::new();
-    chinese_processor.process(&mut merged_data.lines, &options.chinese_conversion);
+    chinese_processor.process(&mut processed_data.lines, &options.chinese_conversion);
 
-    let combined_lines = merged_data.lines;
-
-    match input.target_format {
-        LyricFormat::Lrc => {
-            generators::lrc_generator::generate_lrc(&combined_lines, &metadata_store, &options.lrc)
-        }
+    let output_lyrics = match input.target_format {
+        LyricFormat::Lrc => generators::lrc_generator::generate_lrc(
+            &processed_data.lines,
+            &metadata_store,
+            &options.lrc,
+        ),
         LyricFormat::EnhancedLrc => generators::enhanced_lrc_generator::generate_enhanced_lrc(
-            &combined_lines,
+            &processed_data.lines,
             &metadata_store,
             &options.lrc,
         ),
         LyricFormat::Ass => generators::ass_generator::generate_ass(
-            &combined_lines,
+            &processed_data.lines,
             &metadata_store,
             false,
             &options.ass,
         ),
         LyricFormat::Ttml => generators::ttml_generator::generate_ttml(
-            &combined_lines,
+            &processed_data.lines,
             &metadata_store,
             &options.ttml,
         ),
         LyricFormat::AppleMusicJson => {
             generators::apple_music_json_generator::generate_apple_music_json(
-                &combined_lines,
+                &processed_data.lines,
                 &metadata_store,
                 options,
             )
         }
         LyricFormat::Qrc => {
-            generators::qrc_generator::generate_qrc(&combined_lines, &metadata_store)
+            generators::qrc_generator::generate_qrc(&processed_data.lines, &metadata_store)
         }
-        LyricFormat::Lqe => {
-            generators::lqe_generator::generate_lqe(&combined_lines, &metadata_store, &options.lqe)
-        }
+        LyricFormat::Lqe => generators::lqe_generator::generate_lqe(
+            &processed_data.lines,
+            &metadata_store,
+            &options.lqe,
+        ),
         LyricFormat::Krc => {
-            generators::krc_generator::generate_krc(&combined_lines, &metadata_store)
+            generators::krc_generator::generate_krc(&processed_data.lines, &metadata_store)
         }
         LyricFormat::Yrc => {
-            generators::yrc_generator::generate_yrc(&combined_lines, &metadata_store)
+            generators::yrc_generator::generate_yrc(&processed_data.lines, &metadata_store)
         }
         LyricFormat::Lys => {
-            generators::lys_generator::generate_lys(&combined_lines, &metadata_store)
+            generators::lys_generator::generate_lys(&processed_data.lines, &metadata_store)
         }
         LyricFormat::Spl => {
-            generators::spl_generator::generate_spl(&combined_lines, &metadata_store)
+            generators::spl_generator::generate_spl(&processed_data.lines, &metadata_store)
         }
-        LyricFormat::Lyl => {
-            generators::lyricify_lines_generator::generate_lyl(&combined_lines, &metadata_store)
-        }
+        LyricFormat::Lyl => generators::lyricify_lines_generator::generate_lyl(
+            &processed_data.lines,
+            &metadata_store,
+        ),
         LyricFormat::Musixmatch => Err(ConvertError::Internal(format!(
             "目前还不支持目标格式 '{:?}'",
             input.target_format
         ))),
-    }
+    }?;
+
+    Ok(FullConversionResult {
+        output_lyrics,
+        source_data,
+    })
 }
 
 /// 解析并合并一个包含主歌词、翻译和罗马音的完整输入。

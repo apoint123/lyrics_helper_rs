@@ -415,10 +415,12 @@ impl Provider for MusixmatchClient {
             translations,
             romanizations: Vec::new(),
             target_format: LyricFormat::Lrc,
+            user_metadata_overrides: None,
         };
 
         info!("正在合并主歌词与翻译...");
-        let parsed_data = converter::parse_and_merge(&conversion_input, &Default::default())?;
+        let mut parsed_data = converter::parse_and_merge(&conversion_input, &Default::default())?;
+        parsed_data.source_name = "musixmatch".to_string();
 
         let raw_lyrics = RawLyrics {
             format: raw_main_format.to_string(),

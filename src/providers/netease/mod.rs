@@ -392,9 +392,11 @@ impl Provider for NeteaseClient {
             translations,
             romanizations,
             target_format: LyricFormat::Lrc,
+            user_metadata_overrides: None,
         };
 
-        let parsed_data = converter::parse_and_merge(&conversion_input, &Default::default())?;
+        let mut parsed_data = converter::parse_and_merge(&conversion_input, &Default::default())?;
+        parsed_data.source_name = "netease".to_string();
 
         let raw_lyrics = RawLyrics {
             format: main_format.to_string(),

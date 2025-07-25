@@ -523,10 +523,12 @@ impl Provider for KugouMusic {
             translations: Vec::new(),
             romanizations: Vec::new(),
             target_format: LyricFormat::Krc,
+            user_metadata_overrides: None,
         };
 
         let options = ConversionOptions::default();
-        let parsed_data = converter::parse_and_merge(&conversion_input, &options)?;
+        let mut parsed_data = converter::parse_and_merge(&conversion_input, &options)?;
+        parsed_data.source_name = "kugou".to_string();
 
         let raw_lyrics = RawLyrics {
             format: "krc".to_string(),

@@ -8,6 +8,10 @@ use crate::converter::types::ConvertError;
 /// `lyrics-helper` 库的通用错误枚举。
 #[derive(Error, Debug)]
 pub enum LyricsHelperError {
+    /// 通用的 anyhow 错误
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
+
     /// 网络请求失败 (源自 `reqwest::Error`)
     #[error("网络请求失败: {0}")]
     Reqwest(#[from] reqwest::Error),
