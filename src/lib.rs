@@ -27,7 +27,7 @@
 //!         album: None,
 //!     };
 //!     match helper.search_lyrics(&track_to_search, SearchMode::Ordered).await {
-//!         Ok(Some(lyrics)) => println!("获取歌词成功！共 {} 行。", lyrics.lines.len()),
+//!         Ok(Some(lyrics)) => println!("获取歌词成功！共 {} 行。", lyrics.parsed.lines.len()),
 //!         Ok(None) => println!("未找到任何可用的歌词。"),
 //!         Err(e) => eprintln!("发生错误: {}", e),
 //!     }
@@ -59,6 +59,7 @@
 //!         translations: vec![translation],
 //!         romanizations: vec![],
 //!         target_format: LyricFormat::Ttml, // 目标格式为 TTML
+//!         user_metadata_overrides: None
 //!     };
 //!
 //!     // 配置转换选项
@@ -67,7 +68,7 @@
 //!     // 执行转换
 //!     match helper.convert_lyrics(input, &options).await {
 //!         Ok(ttml_output) => {
-//!             println!("转换成功！TTML 内容:\n{}", ttml_output);
+//!             println!("转换成功！TTML 内容:\n{:?}", ttml_output);
 //!         }
 //!         Err(e) => {
 //!             eprintln!("转换失败: {}", e);

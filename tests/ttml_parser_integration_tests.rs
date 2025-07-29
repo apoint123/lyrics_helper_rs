@@ -137,7 +137,7 @@ fn test_round_trip() {
         } else {
             TtmlTimingMode::Word
         },
-        format: false,
+        format: true,
         ..Default::default()
     };
 
