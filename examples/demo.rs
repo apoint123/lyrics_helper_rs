@@ -20,7 +20,6 @@ use lyrics_helper_rs::{
     providers::amll_ttml_database::AmllTtmlDatabase,
 };
 
-use tokio;
 use tracing::{Level, error, info};
 
 #[tokio::main]

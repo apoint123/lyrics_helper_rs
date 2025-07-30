@@ -54,7 +54,7 @@ mod original {
 
     pub fn decrypt_lyrics(encrypted_hex_str: &str) -> Result<String> {
         let encrypted_bytes = decode(encrypted_hex_str)?;
-        if encrypted_bytes.len() % 8 != 0 {
+        if !encrypted_bytes.len().is_multiple_of(8) {
             return Err("无效的数据长度".into());
         }
         let mut decrypted_data = vec![0; encrypted_bytes.len()];

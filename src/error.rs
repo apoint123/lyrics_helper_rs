@@ -16,10 +16,6 @@ pub enum LyricsHelperError {
     #[error("网络请求失败: {0}")]
     Reqwest(#[from] reqwest::Error),
 
-    /// 网络请求失败 (源自 `wreq::Error`)
-    #[error("网络请求失败: {0}")]
-    Wreq(#[from] wreq::Error),
-
     /// JSON 解析失败 (源自 `serde_json::Error`)
     #[error("JSON 解析失败: {0}")]
     JsonParse(#[from] serde_json::Error),
@@ -79,6 +75,10 @@ pub enum LyricsHelperError {
     /// API 请求被限流
     #[error("API 请求被限流: {0}")]
     RateLimited(String),
+
+    /// 未初始化提供商功能
+    #[error("提供商尚未初始化。请先调用 `load_providers()` 方法。")]
+    ProvidersNotInitialized,
 }
 
 /// `LyricsHelperError` 的 `Result` 类型别名，方便在函数签名中使用。

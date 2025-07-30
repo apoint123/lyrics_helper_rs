@@ -1006,7 +1006,7 @@ mod tests {
     const TEST_TOPLIST_ID: u32 = 26; // QQ音乐热歌榜
     const INSTRUMENTAL_SONG_ID: &str = "201877085"; // 城南花已开
 
-    /// 周杰伦的即兴曲，主歌词包含了纯文本介绍内容
+    // 周杰伦的即兴曲，主歌词包含了纯文本介绍内容
     // const SPECIAL_INSTRUMENTAL_SONG_ID: &str = "582359862";
 
     fn init_tracing() {

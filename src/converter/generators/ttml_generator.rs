@@ -532,7 +532,7 @@ fn write_syllable_with_optional_splitting<W: std::io::Write>(
                     && syl.ends_with_space
                     && Some(token_idx) == last_visible_token_index
                 {
-                    format!("{} ", token)
+                    format!("{token} ")
                 } else {
                     token.to_string()
                 };

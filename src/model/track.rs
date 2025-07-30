@@ -5,19 +5,25 @@ use serde::{Deserialize, Serialize};
 use crate::converter::types::ParsedSourceData;
 
 /// 代表搜索结果与原始查询元数据的匹配程度。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Default)]
 pub enum MatchType {
+    /// 没有匹配或匹配度极低。
     #[default]
-    /// 默认值，表示没有匹配或匹配度未知。
-    None,
-    /// 仅标题匹配。这是最低级别的有效匹配。
-    Title,
-    /// 标题和专辑名匹配。
-    TitleAndAlbum,
-    /// 标题和艺术家匹配。通常比专辑匹配更重要。
-    TitleAndArtist,
-    /// 完美匹配：标题、艺术家和专辑名都匹配。这是最高级别的匹配。
-    Full,
+    None = -1,
+    /// 匹配度非常低。
+    VeryLow = 10,
+    /// 匹配度低。
+    Low = 30,
+    /// 匹配度中等。
+    Medium = 70,
+    /// 匹配度较高。
+    PrettyHigh = 90,
+    /// 匹配度高。
+    High = 95,
+    /// 匹配度非常高。
+    VeryHigh = 99,
+    /// 完美匹配。
+    Perfect = 100,
 }
 
 /// 代表一个可搜索的歌曲元数据，用作搜索函数的输入参数。

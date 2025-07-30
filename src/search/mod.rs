@@ -190,59 +190,67 @@ mod tests {
     struct MockProvider {
         name: &'static str,
     }
+
     #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
     #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-    #[async_trait]
     impl Provider for MockProvider {
         fn name(&self) -> &'static str {
             self.name
         }
+
         async fn search_songs(&self, _: &Track<'_>) -> Result<Vec<SearchResult>> {
             let mut results = Vec::new();
             if self.name == "provider_a" {
-                // 这个结果将与查询完全匹配 -> Full
+                // Perfect
                 results.push(SearchResult {
                     title: "Song A".to_string(),
                     artists: vec!["Artist A".to_string()],
                     album: Some("Album A".to_string()),
+                    duration: Some(240000), // 4:00
                     provider_name: "provider_a".to_string(),
-                    provider_id: "pa_full".to_string(),
+                    provider_id: "pa_perfect".to_string(),
                     ..Default::default()
                 });
-                // 这个结果将匹配标题和专辑 -> TitleAndAlbum
+                // High or PrettyHigh
                 results.push(SearchResult {
                     title: "Song A".to_string(),
-                    artists: vec!["Unknown Artist".to_string()],
-                    album: Some("Album A".to_string()),
+                    artists: vec!["Artist A".to_string()],
+                    album: Some("Wrong Album".to_string()),
+                    duration: Some(300000), // 5:00
                     provider_name: "provider_a".to_string(),
-                    provider_id: "pa_title_album".to_string(),
+                    provider_id: "pa_high".to_string(),
+                    ..Default::default()
+                });
+                // 测试 finalize_single_provider_results 的去重
+                results.push(SearchResult {
+                    title: "Song A".to_string(),
+                    artists: vec!["Artist A".to_string()],
+                    album: Some("Album A".to_string()),
+                    duration: Some(240000),
+                    provider_name: "provider_a".to_string(),
+                    provider_id: "pa_perfect".to_string(),
                     ..Default::default()
                 });
             }
             if self.name == "provider_b" {
-                // 这个结果将匹配标题和艺术家 -> TitleAndArtist
-                results.push(SearchResult {
-                    title: "Song A".to_string(),
-                    artists: vec!["Artist A".to_string()],
-                    album: Some("Unknown Album".to_string()),
-                    provider_name: "provider_b".to_string(),
-                    provider_id: "pb_title_artist".to_string(),
-                    ..Default::default()
-                });
-                // 这个结果只匹配标题 -> Title
+                // Low
                 results.push(SearchResult {
                     title: "Song A".to_string(),
                     artists: vec!["Unknown Artist".to_string()],
                     album: Some("Unknown Album".to_string()),
+                    duration: Some(180000), // 3:00
                     provider_name: "provider_b".to_string(),
-                    provider_id: "pb_title".to_string(),
+                    provider_id: "pb_low".to_string(),
                     ..Default::default()
                 });
-                // 这个结果用于测试去重，它与 provider_a 的一个结果 ID 相同
+                // None
                 results.push(SearchResult {
-                    title: "Duplicate ID Song".to_string(),
+                    title: "Different Song".to_string(),
+                    artists: vec!["Different Artist".to_string()],
+                    album: Some("Different Album".to_string()),
+                    duration: Some(240000),
                     provider_name: "provider_b".to_string(),
-                    provider_id: "pa_full".to_string(),
+                    provider_id: "pb_none".to_string(),
                     ..Default::default()
                 });
             }
@@ -315,7 +323,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(results.len(), 5, "应该聚合来自所有提供商的5个唯一结果");
+        // provider_a 返回 3 个结果，其中 1 个是重复的，去重后剩 2 个。
+        // provider_b 返回 2 个结果。
+        // 总共应该有4 个结果。
+        assert_eq!(results.len(), 4, "结果数量应为 4");
 
         println!(
             "排序后的结果: {:?}",
@@ -325,26 +336,20 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        assert_eq!(results[0].provider_id, "pa_full");
-        assert_eq!(results[0].match_type, MatchType::Full);
+        assert_eq!(results[0].provider_id, "pa_perfect");
+        assert_eq!(results[0].match_type, MatchType::Perfect, "应为完美匹配");
 
-        assert_eq!(results[1].provider_id, "pb_title_artist");
-        assert_eq!(results[1].match_type, MatchType::TitleAndArtist);
+        assert_eq!(results[1].provider_id, "pa_high");
+        assert!(results[1].match_type > MatchType::Medium, "应为高度匹配");
 
-        assert_eq!(results[2].provider_id, "pa_title_album");
-        assert_eq!(results[2].match_type, MatchType::TitleAndAlbum);
-
-        assert_eq!(results[3].provider_id, "pb_title");
-        assert_eq!(results[3].match_type, MatchType::Title);
-
-        // 这个结果的标题不匹配，所以它的匹配度应该是 None
-        assert_eq!(results[4].provider_id, "pa_full"); // ID 是 pa_full，但来自 provider_b
-        assert_eq!(results[4].provider_name, "provider_b");
-        assert_eq!(results[4].match_type, MatchType::None);
-
-        println!(
-            "test_search_track_in_multiple_providers: 成功聚合、排序和去重了多个提供商的结果。"
+        assert_eq!(results[2].provider_id, "pb_low");
+        assert!(
+            results[2].match_type > MatchType::None && results[2].match_type < MatchType::Medium,
+            "应为低匹配"
         );
+
+        assert_eq!(results[3].provider_id, "pb_none");
+        assert_eq!(results[3].match_type, MatchType::None, "应为不匹配");
     }
 
     #[tokio::test]
@@ -371,8 +376,8 @@ mod tests {
 
         assert_eq!(
             first_result.match_type,
-            MatchType::Full,
-            "最佳匹配结果的类型应该是 Full"
+            MatchType::Perfect,
+            "最佳匹配结果的类型应该是 Perfect"
         );
 
         let is_sorted = results
