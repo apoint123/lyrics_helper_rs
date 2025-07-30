@@ -6,8 +6,7 @@
 use crate::providers::qq::device::Device;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Local;
-use cipher::BlockEncryptMut;
-use cipher::KeyIvInit;
+use cipher::{BlockEncryptMut, KeyIvInit};
 use md5::{Digest, Md5};
 use rand::Rng;
 use rsa::pkcs8::DecodePublicKey;
@@ -37,7 +36,7 @@ fn rsa_encrypt(content: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
     let public_key = RsaPublicKey::from_public_key_pem(cleaned_key)?;
 
-    let mut rng = rsa::rand_core::OsRng;
+    let mut rng = rand::rng();
     let encrypted = public_key.encrypt(&mut rng, Pkcs1v15Encrypt, content)?;
     Ok(encrypted)
 }
@@ -175,7 +174,7 @@ pub async fn get_qimei(
         signature_hasher.update(nonce.as_bytes());
         signature_hasher.update(SECRET.as_bytes());
         signature_hasher.update(extra.as_bytes());
-        let sign = format!("{:x}", signature_hasher.finalize());
+        let sign = hex::encode(signature_hasher.finalize());
 
         let ts_sec = ts / 1000;
         let client = reqwest::Client::new();
@@ -183,7 +182,7 @@ pub async fn get_qimei(
         header_sign_hasher.update(format!(
             "qimei_qq_androidpzAuCmaFAaFaHrdakPjLIEqKrGnSOOvH{ts_sec}"
         ));
-        let header_sign = format!("{:x}", header_sign_hasher.finalize());
+        let header_sign = hex::encode(header_sign_hasher.finalize());
 
         let response = client
             .post("https://api.tencentmusic.com/tme/trpc/proxy")

@@ -1,7 +1,6 @@
 //! 此模块实现了与 Musixmatch API 进行交互的 `Provider`。
 //!
-//! 不好用。建议不要用。经常提示 captcha 错误，
-//! 但用浏览器打开又正常，我不知道这是为什么。
+//! 不好用。建议不要用。已废弃。
 //!
 //! API 来源于 https://github.com/Strvm/musicxmatch-api
 
@@ -13,14 +12,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use base64::Engine;
 use chrono::Utc;
+use hmac::KeyInit;
 use hmac::{Hmac, Mac};
 use regex::Regex;
-// use reqwest::Client as ReqwestClient;
+use reqwest::Client;
 use serde::de::DeserializeOwned;
 use sha2::Sha256;
 use tracing::{debug, error, info, instrument, trace, warn};
-use wreq::{Client as WreqClient, header};
-use wreq_util::Emulation;
 
 use crate::{
     converter::{
@@ -51,13 +49,12 @@ static SECRET_RE: LazyLock<Regex> =
 #[derive(Debug, Clone)]
 pub struct MusixmatchClient {
     secret_key: Arc<OnceLock<String>>,
-    wreq_client: WreqClient, // 用于大部分 API
-                             // reqwest_client: ReqwestClient, // 用于 richsync API
+    reqwest_client: Client,
 }
 
 impl Default for MusixmatchClient {
     fn default() -> Self {
-        Self::new_sync()
+        Self::new_sync().expect("Failed to create MusixmatchClient with cookie store")
     }
 }
 
@@ -86,31 +83,22 @@ fn to_generic_song(track_data: &models::Track) -> generic::Song {
 
 impl MusixmatchClient {
     /// 创建一个新的 `MusixmatchClient` 实例。
-    pub fn new_sync() -> Self {
-        // 许多 API 需要 TLS 指纹伪装
-        let headers = header::HeaderMap::new();
-        let wreq_client = WreqClient::builder()
-            .emulation(Emulation::Chrome131)
-            .default_headers(headers)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap();
+    pub fn new_sync() -> Result<Self> {
+        let reqwest_client = Client::builder()
+            .cookie_store(true) // <--- 核心改动：启用 cookie store
+            .user_agent(USER_AGENT) // 建议将 User-Agent 统一在 ClientBuilder 中设置
+            .build()?;
 
-        // 逐字接口现在又需要 TLS 指纹伪装了，先暂时注释掉吧
-        // 如果之后又需要普通的 reqwest 客户端，在取消注释
-        // // 然而，逐字歌词接口只能用普通的 reqwest 客户端
-        // let reqwest_client = ReqwestClient::new();
-
-        Self {
+        Ok(Self {
             secret_key: Arc::new(Default::default()),
-            wreq_client,
-            // reqwest_client,
-        }
+            reqwest_client,
+        })
     }
 
     /// 创建一个新的 `MusixmatchClient` 实例。
     pub async fn new() -> Result<Self> {
-        Ok(Self::new_sync())
+        // 将 new_sync 的潜在错误转换成我们项目自己的错误类型
+        Self::new_sync().map_err(|e| LyricsHelperError::ApiError(e.to_string()))
     }
 
     #[instrument(skip(self))]
@@ -118,12 +106,14 @@ impl MusixmatchClient {
         info!("正在获取签名密钥...");
 
         let html_content = self
-            .wreq_client
+            .reqwest_client
             .get("https://www.musixmatch.com/search")
-            .header("user-agent", USER_AGENT)
+            // .header("user-agent", USER_AGENT) // User-Agent 已在 ClientBuilder 中设置，这里可以移除
             .header("Cookie", "mxm_bab=AB")
             .send()
             .await?
+            // 当这行代码执行完毕后，reqwest 的 cookie_store 已经自动保存了
+            // 服务器返回的 Set-Cookie 中的 x-mxm-user-id
             .text()
             .await?;
 
@@ -135,7 +125,7 @@ impl MusixmatchClient {
             })?;
 
         let js_content = self
-            .wreq_client
+            .reqwest_client
             .get(app_js_url)
             .send()
             .await?
@@ -195,18 +185,9 @@ impl MusixmatchClient {
 
         trace!(final_url = %final_url, "发送最终的 Musixmatch 请求");
 
-        #[allow(clippy::match_single_binding)]
         let resp_text = match method {
-            // "track.richsync.get" => {
-            //     self.reqwest_client
-            //         .get(&final_url)
-            //         .send()
-            //         .await?
-            //         .text()
-            //         .await?
-            // }
             _ => {
-                self.wreq_client
+                self.reqwest_client
                     .get(&final_url)
                     .header("User-Agent", USER_AGENT)
                     .header("Accept", "*/*")
@@ -434,20 +415,6 @@ impl Provider for MusixmatchClient {
         })
     }
 
-    async fn get_song_info(&self, song_id: &str) -> Result<generic::Song> {
-        let params = format!("commontrack_id={song_id}");
-
-        let result = self
-            .request_get::<models::GetTrackBody>("track.get", &params)
-            .await?;
-
-        if let Some(track_data) = result.track {
-            Ok(to_generic_song(&track_data))
-        } else {
-            Err(LyricsHelperError::LyricNotFound)
-        }
-    }
-
     async fn get_album_info(&self, album_id: &str) -> Result<generic::Album> {
         let method = "album.get";
         let params = format!("album_id={album_id}");
@@ -504,16 +471,6 @@ impl Provider for MusixmatchClient {
         Ok(songs)
     }
 
-    async fn get_album_cover_url(&self, album_id: &str, _: generic::CoverSize) -> Result<String> {
-        let album_info = self.get_album_info(album_id).await?;
-
-        let cover_url = album_info.cover_url.ok_or_else(|| {
-            LyricsHelperError::ApiError(format!("专辑 (ID: {album_id}) 没有可用的封面图。"))
-        })?;
-
-        Ok(cover_url)
-    }
-
     async fn get_singer_songs(
         &self,
         _singer_id: &str,
@@ -524,15 +481,39 @@ impl Provider for MusixmatchClient {
             "Musixmatch 提供商不支持 `get_singer_songs`".to_string(),
         ))
     }
+
     async fn get_playlist(&self, _playlist_id: &str) -> Result<generic::Playlist> {
         Err(LyricsHelperError::ProviderNotSupported(
             "Musixmatch 提供商不支持 `get_playlist`".to_string(),
         ))
     }
+
+    async fn get_song_info(&self, song_id: &str) -> Result<generic::Song> {
+        let params = format!("commontrack_id={song_id}");
+
+        let result = self
+            .request_get::<models::GetTrackBody>("track.get", &params)
+            .await?;
+
+        if let Some(track_data) = result.track {
+            Ok(to_generic_song(&track_data))
+        } else {
+            Err(LyricsHelperError::LyricNotFound)
+        }
+    }
     async fn get_song_link(&self, _song_id: &str) -> Result<String> {
         Err(LyricsHelperError::ProviderNotSupported(
             "Musixmatch 提供商不支持 `get_song_link`".to_string(),
         ))
+    }
+    async fn get_album_cover_url(&self, album_id: &str, _: generic::CoverSize) -> Result<String> {
+        let album_info = self.get_album_info(album_id).await?;
+
+        let cover_url = album_info.cover_url.ok_or_else(|| {
+            LyricsHelperError::ApiError(format!("专辑 (ID: {album_id}) 没有可用的封面图。"))
+        })?;
+
+        Ok(cover_url)
     }
 }
 
@@ -595,7 +576,7 @@ mod tests {
     #[ignore]
     async fn test_search_and_get_lyrics() {
         init_tracing();
-        let client = MusixmatchClient::new_sync();
+        let client = MusixmatchClient::new_sync().unwrap();
 
         let track_meta = Track {
             title: Some(TEST_TRACK_TITLE),
@@ -641,7 +622,7 @@ mod tests {
     #[ignore]
     async fn test_get_richsync_lyrics() {
         init_tracing();
-        let client = MusixmatchClient::new_sync();
+        let client = MusixmatchClient::new_sync().unwrap();
         let commontrack_id = "63145624";
 
         let method = "track.richsync.get";
@@ -665,7 +646,7 @@ mod tests {
     #[ignore]
     async fn test_get_infos() {
         init_tracing();
-        let client = MusixmatchClient::new_sync();
+        let client = MusixmatchClient::new_sync().unwrap();
 
         let song_id = "63145624";
         let song_info = client.get_song_info(song_id).await.unwrap();
@@ -692,7 +673,7 @@ mod tests {
     #[ignore]
     async fn test_get_album_cover_url() {
         init_tracing();
-        let client = MusixmatchClient::new_sync();
+        let client = MusixmatchClient::new_sync().unwrap();
 
         let track_meta = Track {
             title: Some("目及皆是你"),

@@ -32,7 +32,7 @@ pub enum ConvertError {
     InvalidTime(String),
     /// 字符串格式化错误。
     #[error("格式错误: {0}")]
-    Format(#[from] std::fmt::Error),
+    Format(#[from] fmt::Error),
     /// 内部逻辑错误或未明确分类的错误。
     #[error("错误: {0}")]
     Internal(String),
@@ -76,8 +76,8 @@ impl ConvertError {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ParseCanonicalMetadataKeyError(String); // 存储无法解析的原始键字符串
 
-impl std::fmt::Display for ParseCanonicalMetadataKeyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ParseCanonicalMetadataKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "未知或无效的元数据键: {}", self.0)
     }
 }
@@ -117,8 +117,8 @@ pub enum LyricFormat {
     Lqe,
     /// 酷狗 KRC 格式。
     Krc,
-    /// Musixmatch JSON 格式。
-    Musixmatch,
+    // /// Musixmatch JSON 格式。
+    // Musixmatch,
 }
 
 impl LyricFormat {
@@ -137,7 +137,7 @@ impl LyricFormat {
             LyricFormat::Spl,
             LyricFormat::Lqe,
             LyricFormat::Krc,
-            LyricFormat::Musixmatch,
+            // LyricFormat::Musixmatch,
         ]
     }
 
@@ -156,7 +156,7 @@ impl LyricFormat {
             LyricFormat::Spl => "spl",
             LyricFormat::Lqe => "lqe",
             LyricFormat::Krc => "krc",
-            LyricFormat::Musixmatch => "json",
+            // LyricFormat::Musixmatch => "json",
         }
     }
 
@@ -200,7 +200,7 @@ impl fmt::Display for LyricFormat {
             LyricFormat::Spl => write!(f, "SPL"),
             LyricFormat::Lqe => write!(f, "Lyricify Quick Export"),
             LyricFormat::Krc => write!(f, "KRC"),
-            LyricFormat::Musixmatch => write!(f, "Musixmatch lyrics"),
+            // LyricFormat::Musixmatch => write!(f, "Musixmatch lyrics"),
         }
     }
 }

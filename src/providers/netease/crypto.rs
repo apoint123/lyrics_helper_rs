@@ -5,11 +5,12 @@
 
 use aes::{
     Aes128,
-    cipher::{BlockEncryptMut, BlockSizeUser, KeyInit, KeyIvInit, generic_array::GenericArray},
+    cipher::{BlockSizeUser, KeyIvInit, generic_array::GenericArray},
 };
 use base64::{Engine, prelude::BASE64_STANDARD};
 use block_padding::Pkcs7;
 use cbc::Encryptor as CbcModeEncryptor;
+use cipher::{BlockEncryptMut, KeyInit};
 use ecb::Encryptor as EcbModeEncryptor;
 use md5::{Digest, Md5 as Md5Hasher};
 use num_bigint::BigInt;
@@ -144,7 +145,7 @@ pub fn prepare_eapi_params<T: serde::Serialize>(url_path: &str, params_obj: &T) 
     // 3. 计算该消息字符串的 MD5 哈希
     let mut md5_hasher = Md5Hasher::new_with_prefix("");
     md5_hasher.update(message.as_bytes());
-    let digest = format!("{:x}", md5_hasher.finalize());
+    let digest = hex::encode(md5_hasher.finalize());
 
     // 4. 构造一个新的待加密字符串
     let data_to_encrypt_str = format!("{url_path}-36cd479b6b5-{text}-36cd479b6b5-{digest}");

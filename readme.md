@@ -7,35 +7,34 @@
 
 ## 支持的歌词转换格式
 
-| 格式名称 | 解析支持 | 生成支持 |
-| :-----: | :------: | :-----: |
-| 标准 LRC | ✅ | ✅ |
-| 增强型 LRC | ✅ | ✅ |
-| QRC | ✅ | ✅ |
-| KRC | ✅ | ✅ |
-| YRC | ✅ | ✅ |
-| Apple Music JSON | ✅ | ✅ |
-| TTML | ✅ | ✅ |
-| Musixmatch JSON | ✅ | ❌ |
-| Lyricify Syllable | ✅ | ✅ |
-| Lyricify Quick Export | ✅ | ✅ |
-| Lyricify Lines | ✅ | ✅ |
-| Salt Player Lyrics | ✅ | ✅ |
-| Advanced SubStation Alpha | ✅ | ✅ |
+|           格式名称            | 解析支持 | 生成支持 |
+|:-------------------------:|:----:|:----:|
+|          标准 LRC           |  ✅   |  ✅   |
+|          增强型 LRC          |  ✅   |  ✅   |
+|            QRC            |  ✅   |  ✅   |
+|            KRC            |  ✅   |  ✅   |
+|            YRC            |  ✅   |  ✅   |
+|     Apple Music JSON      |  ✅   |  ✅   |
+|           TTML            |  ✅   |  ✅   |
+|     Lyricify Syllable     |  ✅   |  ✅   |
+|   Lyricify Quick Export   |  ✅   |  ✅   |
+|      Lyricify Lines       |  ✅   |  ✅   |
+|    Salt Player Lyrics     |  ✅   |  ✅   |
+| Advanced SubStation Alpha |  ✅   |  ✅   |
 
 ## 各提供商支持情况
 
-| 功能 | QQ音乐 | 网易云音乐 | 酷狗音乐 | Musixmatch | AMLL TTML DB |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| `search_songs` (搜索歌曲) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `get_full_lyrics` (获取歌词) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `get_song_info` (获取歌曲信息) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `get_album_info` (获取专辑信息) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `get_album_songs` (获取专辑歌曲) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `get_album_cover_url` (获取专辑封面) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `get_singer_songs` (获取歌手歌曲) | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `get_playlist` (获取歌单) | ✅ | ✅ | ✅ | ❌ | ❌ |
-| `get_song_link` (获取歌曲播放链接)[^1] | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 功能                             | QQ音乐 | 网易云音乐 | 酷狗音乐 AMLL TTML DB |
+|:-------------------------------|:----:|:-----:|:----::------------:|
+| `search_songs` (搜索歌曲)          |  ✅   |   ✅   |  ✅   |      ✅       |
+| `get_full_lyrics` (获取歌词)       |  ✅   |   ✅   |  ✅   |      ✅       |
+| `get_song_info` (获取歌曲信息)       |  ✅   |   ✅   |  ✅   |      ❌       |
+| `get_album_info` (获取专辑信息)      |  ✅   |   ✅   |  ✅   |      ❌       |
+| `get_album_songs` (获取专辑歌曲)     |  ✅   |   ✅   |  ✅   |      ❌       |
+| `get_album_cover_url` (获取专辑封面) |  ✅   |   ✅   |  ✅   |      ❌       |
+| `get_singer_songs` (获取歌手歌曲)    |  ✅   |   ✅   |  ✅   |      ❌       |
+| `get_playlist` (获取歌单)          |  ✅   |   ✅   |  ✅   |      ❌       |
+| `get_song_link` (获取歌曲播放链接)[^1] |  ✅   |   ✅   |  ✅   |      ❌       |
 
 [^1]: 无法获取需要 VIP 或者付费的歌曲链接。
 
@@ -52,7 +51,6 @@ src/
 │   ├── qq/             #    - QQ音乐源的实现。
 │   ├── netease/        #    - 网易云音乐源的实现。
 │   ├── kugou/          #    - 酷狗音乐源的实现。
-│   ├── musixmatch/     #    - Musixmatch 源的实现。
 │   └── amll_ttml_database/ - # AMLL TTML Database 源的实现。
 │
 ├── converter/          # 核心转换与处理模块。

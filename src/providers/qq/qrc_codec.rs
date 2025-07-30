@@ -779,13 +779,13 @@ mod tests {
     #[test]
     #[ignore]
     fn capture_key_schedule() {
-        let key = super::qrc_logic::custom_des::KEY_1;
+        let key = qrc_logic::custom_des::KEY_1;
         let mut schedule = [[0u8; 6]; 16];
 
-        super::qrc_logic::custom_des::key_schedule(
+        qrc_logic::custom_des::key_schedule(
             key,
             &mut schedule,
-            super::qrc_logic::custom_des::Mode::Encrypt,
+            qrc_logic::custom_des::Mode::Encrypt,
         );
 
         for (i, round_key) in schedule.iter().enumerate() {
@@ -822,13 +822,13 @@ mod tests {
             [0xD0, 0x2C, 0x04, 0x00, 0xCA, 0x82], // Round 16
         ];
 
-        let key = super::qrc_logic::custom_des::KEY_1;
+        let key = qrc_logic::custom_des::KEY_1;
         let mut schedule = [[0u8; 6]; 16];
 
-        super::qrc_logic::custom_des::key_schedule(
+        qrc_logic::custom_des::key_schedule(
             key,
             &mut schedule,
-            super::qrc_logic::custom_des::Mode::Encrypt,
+            qrc_logic::custom_des::Mode::Encrypt,
         );
 
         for i in 0..16 {

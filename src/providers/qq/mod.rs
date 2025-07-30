@@ -666,7 +666,7 @@ impl QQMusic {
     async fn try_get_lyrics_internal(&self, song_id: &str) -> Result<FullLyricsResult> {
         let mut param_map = serde_json::Map::new();
         if song_id.parse::<u64>().is_ok() {
-            param_map.insert("songId".to_string(), json!(song_id.parse::<u64>().unwrap()));
+            param_map.insert("songId".to_string(), json!(song_id.parse::<u64>()?));
         } else {
             param_map.insert("songMid".to_string(), json!(song_id));
         }
@@ -691,7 +691,7 @@ impl QQMusic {
         {
             LyricFormat::Lrc
         } else {
-            let mut parsed_data = crate::converter::types::ParsedSourceData::default();
+            let mut parsed_data = converter::types::ParsedSourceData::default();
             parsed_data.source_name = "qq".to_string();
             parsed_data.raw_metadata.insert(
                 "introduction".to_string(),

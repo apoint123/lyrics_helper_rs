@@ -16,7 +16,7 @@ use crate::{
 #[cfg(not(target_arch = "wasm32"))]
 pub mod amll_ttml_database;
 pub mod kugou;
-pub mod musixmatch;
+// pub mod musixmatch;
 pub mod netease;
 pub mod qq;
 

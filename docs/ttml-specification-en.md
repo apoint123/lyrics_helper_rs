@@ -100,7 +100,7 @@ To link the lyrics to major music platforms, **at least one** platform ID must b
 
 You can use AMLL metadata to credit the lyric author, for example:
 
-  * **Lyric Author Github ID**: `key="ttmlAuthorGithub"`
+  * **Lyric Author GitHub ID**: `key="ttmlAuthorGithub"`
   * **Lyric Author GitHub Username**: `key="ttmlAuthorGithubLogin"`
 
 Please refer to the [AMLL Wiki](https://github.com/Steve-xmh/amll-ttml-tool/wiki/%E6%AD%8C%E8%AF%8D%E5%85%83%E6%95%B0%E6%8D%AE) **(Chinese only)** for more information.

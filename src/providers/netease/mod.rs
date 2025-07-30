@@ -450,6 +450,68 @@ impl Provider for NeteaseClient {
         Ok(album_info)
     }
 
+    async fn get_album_songs(
+        &self,
+        album_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<generic::Song>> {
+        let url = format!("https://music.163.com/weapi/v1/album/{album_id}");
+        let payload = json!({ "csrf_token": "" });
+
+        let resp: models::AlbumContentResult = self.post_weapi(&url, &payload).await?;
+
+        if resp.code != 200 {
+            return Err(LyricsHelperError::ApiError(format!(
+                "获取专辑歌曲失败，接口返回错误码: {}",
+                resp.code
+            )));
+        }
+
+        // 这个接口不支持服务端分页
+        let songs = resp
+            .songs
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .map(Into::into)
+            .collect();
+
+        Ok(songs)
+    }
+
+    async fn get_singer_songs(
+        &self,
+        singer_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<generic::Song>> {
+        let url = "https://music.163.com/weapi/v1/artist/songs";
+
+        let payload = json!({
+            "id": singer_id,
+            "private_cloud": "true",
+            "work_type": 1,
+            "order": "hot", // 默认为热门排序，可根据需求设为"time"
+            "offset": offset,
+            "limit": limit,
+            "csrf_token": ""
+        });
+
+        let resp: models::ArtistSongsResult = self.post_weapi(url, &payload).await?;
+
+        if resp.code != 200 {
+            return Err(LyricsHelperError::ApiError(format!(
+                "获取歌手歌曲失败，接口返回错误码: {}",
+                resp.code
+            )));
+        }
+
+        let songs = resp.songs.into_iter().map(Into::into).collect();
+
+        Ok(songs)
+    }
+
     async fn get_playlist(&self, playlist_id: &str) -> Result<generic::Playlist> {
         let url = "https://music.163.com/weapi/v6/playlist/detail";
         let payload = json!({ "id": playlist_id, "n": 1000, "s": "8", "csrf_token": "" });
@@ -539,68 +601,6 @@ impl Provider for NeteaseClient {
         };
 
         Ok(format!("{base_cover_url}?param={size_param}"))
-    }
-
-    async fn get_singer_songs(
-        &self,
-        singer_id: &str,
-        limit: u32,
-        offset: u32,
-    ) -> Result<Vec<generic::Song>> {
-        let url = "https://music.163.com/weapi/v1/artist/songs";
-
-        let payload = json!({
-            "id": singer_id,
-            "private_cloud": "true",
-            "work_type": 1,
-            "order": "hot", // 默认为热门排序，可根据需求设为"time"
-            "offset": offset,
-            "limit": limit,
-            "csrf_token": ""
-        });
-
-        let resp: models::ArtistSongsResult = self.post_weapi(url, &payload).await?;
-
-        if resp.code != 200 {
-            return Err(LyricsHelperError::ApiError(format!(
-                "获取歌手歌曲失败，接口返回错误码: {}",
-                resp.code
-            )));
-        }
-
-        let songs = resp.songs.into_iter().map(Into::into).collect();
-
-        Ok(songs)
-    }
-
-    async fn get_album_songs(
-        &self,
-        album_id: &str,
-        limit: u32,
-        offset: u32,
-    ) -> Result<Vec<generic::Song>> {
-        let url = format!("https://music.163.com/weapi/v1/album/{album_id}");
-        let payload = json!({ "csrf_token": "" });
-
-        let resp: models::AlbumContentResult = self.post_weapi(&url, &payload).await?;
-
-        if resp.code != 200 {
-            return Err(LyricsHelperError::ApiError(format!(
-                "获取专辑歌曲失败，接口返回错误码: {}",
-                resp.code
-            )));
-        }
-
-        // 这个接口不支持服务端分页
-        let songs = resp
-            .songs
-            .into_iter()
-            .skip(offset as usize)
-            .take(limit as usize)
-            .map(Into::into)
-            .collect();
-
-        Ok(songs)
     }
 }
 

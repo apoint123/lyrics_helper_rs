@@ -3,6 +3,7 @@
 
 use md5::{self, Digest, Md5};
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 const KUGOU_ANDROID_SALT: &str = "OIlwieks28dk2k092lksi2UIkp";
 const KUGOU_LITE_ANDROID_SALT: &str = "LnT6xpN3khm36zse0QzvmgTZ3waWdRSA";
@@ -44,7 +45,12 @@ pub fn signature_android_params(
     let mut hasher = Md5::new();
     hasher.update(string_to_sign.as_bytes());
     let digest = hasher.finalize();
-    format!("{digest:x}")
+
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut output, "{:02x}", byte).unwrap();
+    }
+    output
 }
 
 const KUGOU_SIGN_KEY_SALT: &str = "57ae12eb6890223e355ccfcb74edf70d";
@@ -58,14 +64,26 @@ pub fn sign_key(hash: &str, mid: &str, userid: u64, appid: &str, is_lite: bool) 
         KUGOU_SIGN_KEY_SALT
     };
     let input = format!("{hash}{salt}{appid}{mid}{userid}");
-    format!("{:x}", Md5::digest(input.as_bytes()))
+    let digest = Md5::digest(input.as_bytes());
+
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut output, "{:02x}", byte).unwrap();
+    }
+    output
 }
 
 /// 为新的 /kmr/ 接口生成 body 中的 `key` 参数。
 pub fn sign_params_key(appid: &str, clientver: &str, clienttime: &str) -> String {
     // data 是 clienttime, str 是 KUGOU_ANDROID_SALT
     let input = format!("{appid}{KUGOU_ANDROID_SALT}{clientver}{clienttime}");
-    format!("{:x}", Md5::digest(input.as_bytes()))
+    let digest = Md5::digest(input.as_bytes());
+
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut output, "{:02x}", byte).unwrap();
+    }
+    output
 }
 
 /// 为酷狗设备注册接口生成 `signature`。
@@ -78,7 +96,13 @@ pub fn signature_register_params(params: &BTreeMap<String, String>) -> String {
 
     let string_to_sign = format!("1014{params_string}1014");
 
-    format!("{:x}", Md5::digest(string_to_sign.as_bytes()))
+    let digest = Md5::digest(string_to_sign.as_bytes());
+
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut output, "{:02x}", byte).unwrap();
+    }
+    output
 }
 
 #[cfg(test)]

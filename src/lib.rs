@@ -100,10 +100,7 @@ use crate::{
         ConversionInput, ConversionOptions, FullConversionResult, ParsedSourceData,
     },
     model::track::FullLyricsResult,
-    providers::{
-        Provider, kugou::KugouMusic, musixmatch::MusixmatchClient, netease::NeteaseClient,
-        qq::QQMusic,
-    },
+    providers::{Provider, kugou::KugouMusic, netease::NeteaseClient, qq::QQMusic},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -173,14 +170,14 @@ impl LyricsHelper {
                         .map(|p| Box::new(p) as Box<dyn Provider>),
                 )
             }),
-            Box::pin(async {
-                (
-                    "MusixmatchClient",
-                    MusixmatchClient::new()
-                        .await
-                        .map(|p| Box::new(p) as Box<dyn Provider>),
-                )
-            }),
+            // Box::pin(async {
+            //     (
+            //         "MusixmatchClient",
+            //         MusixmatchClient::new()
+            //             .await
+            //             .map(|p| Box::new(p) as Box<dyn Provider>),
+            //     )
+            // }),
             #[cfg(not(target_arch = "wasm32"))]
             Box::pin(async {
                 (
@@ -199,18 +196,18 @@ impl LyricsHelper {
         let providers = results
             .into_iter()
             .filter_map(|(name, result)| match result {
-                Result::Ok(provider) => {
+                Ok(provider) => {
                     tracing::info!("[Main] Provider '{}' 初始化成功。", name);
                     Some(provider)
                 }
-                Result::Err(e) => {
+                Err(e) => {
                     tracing::error!("[Main] Provider '{}' 初始化失败: {}", name, e);
                     None
                 }
             })
             .collect();
 
-        Result::Ok(Self { providers })
+        Ok(Self { providers })
     }
 
     /// 在所有支持的音乐平台中并发地搜索歌曲。
@@ -247,7 +244,7 @@ impl LyricsHelper {
             }
         }
 
-        Result::Ok(unique_results)
+        Ok(unique_results)
     }
 
     /// 根据提供商名称和歌曲 ID 获取歌词。
@@ -347,18 +344,19 @@ impl LyricsHelper {
                 .collect();
             if selected_providers.is_empty() {
                 tracing::warn!("在 Subset 模式下，没有找到任何一个指定的、已初始化的提供商。");
-                return Result::Ok(None);
+                return Ok(None);
             }
             return search_lyrics_parallel(self, &selected_providers, track_meta).await;
         }
 
         if let SearchMode::Specific(provider_name) = mode {
             tracing::info!("使用 [Specific] 模式在 '{provider_name}' 中搜索歌词...");
-            if let Some(provider) = self.providers.iter().find(|p| p.name() == provider_name) {
-                return search_and_fetch_from_provider(provider.as_ref(), track_meta).await;
+            return if let Some(provider) = self.providers.iter().find(|p| p.name() == provider_name)
+            {
+                search_and_fetch_from_provider(provider.as_ref(), track_meta).await
             } else {
-                return Err(LyricsHelperError::ProviderNotSupported(provider_name));
-            }
+                Err(LyricsHelperError::ProviderNotSupported(provider_name))
+            };
         }
 
         // 优先搜索 AMLL TTML Database
@@ -371,7 +369,7 @@ impl LyricsHelper {
             match search_and_fetch_from_provider(amll_provider.as_ref(), track_meta).await? {
                 Some(lyrics_result) => {
                     tracing::info!("在 AMLL TTML Database 中成功获取到歌词，搜索结束。");
-                    return Result::Ok(Some(lyrics_result));
+                    return Ok(Some(lyrics_result));
                 }
                 None => {
                     tracing::info!("在 AMLL TTML Database 中未找到可用歌词，继续搜索...");
@@ -393,19 +391,19 @@ impl LyricsHelper {
                     match search_and_fetch_from_provider(provider.as_ref(), track_meta).await? {
                         Some(lyrics_result) => {
                             tracing::info!("在 '{}' 成功获取到歌词，搜索结束。", provider.name());
-                            return Result::Ok(Some(lyrics_result));
+                            return Ok(Some(lyrics_result));
                         }
                         None => continue,
                     }
                 }
                 tracing::info!("所有其余提供商都未能找到歌词。");
-                Result::Ok(None)
+                Ok(None)
             }
             SearchMode::Parallel => {
                 tracing::info!("使用 [Parallel] 模式在其余提供商中搜索歌词...");
-                return search_lyrics_parallel(self, &other_providers, track_meta).await;
+                search_lyrics_parallel(self, &other_providers, track_meta).await
             }
-            _ => Result::Ok(None),
+            _ => Ok(None),
         }
     }
 }
@@ -423,15 +421,15 @@ async fn search_and_fetch_from_provider(
             best_match.title,
             best_match.provider_id
         );
-        match provider.get_full_lyrics(&best_match.provider_id).await {
-            Result::Ok(lyrics_data) => return Result::Ok(Some(lyrics_data)),
+        return match provider.get_full_lyrics(&best_match.provider_id).await {
+            Ok(lyrics_data) => Ok(Some(lyrics_data)),
             Err(LyricsHelperError::LyricNotFound) => {
                 tracing::info!(
                     "找到歌曲 '{}'，但提供商 '{}' 没有提供歌词。",
                     best_match.title,
                     provider.name()
                 );
-                return Result::Ok(None);
+                Ok(None)
             }
             Err(e) => {
                 tracing::warn!(
@@ -440,11 +438,11 @@ async fn search_and_fetch_from_provider(
                     best_match.provider_id,
                     e
                 );
-                return Err(e);
+                Err(e)
             }
-        }
+        };
     }
-    Result::Ok(None)
+    Ok(None)
 }
 
 async fn search_lyrics_parallel<'a>(
@@ -475,16 +473,16 @@ async fn search_lyrics_parallel<'a>(
             .get_full_lyrics(&best_match.provider_name, &best_match.provider_id)
             .await
         {
-            Result::Ok(lyrics_data) => Result::Ok(Some(lyrics_data)),
+            Ok(lyrics_data) => Ok(Some(lyrics_data)),
             Err(LyricsHelperError::LyricNotFound) => {
                 tracing::info!("最佳匹配项 '{}' 无歌词。", best_match.title);
-                Result::Ok(None)
+                Ok(None)
             }
             Err(e) => Err(e),
         }
     } else {
         tracing::info!("并行搜索未找到任何结果。");
-        Result::Ok(None)
+        Ok(None)
     }
 }
 
@@ -571,7 +569,7 @@ mod integration_tests {
         // for (key, values) in &parsed_data.raw_metadata { ... }
 
         let ttml_options = ConversionOptions {
-            ttml: crate::converter::types::TtmlGenerationOptions {
+            ttml: converter::types::TtmlGenerationOptions {
                 format: false,
                 ..Default::default()
             },

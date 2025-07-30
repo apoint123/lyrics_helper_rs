@@ -96,9 +96,9 @@ fn strip_artist_from_title<'a>(full_title: &'a str, artists_str: &str) -> &'a st
 
 impl KugouMusic {
     fn from_dfid(dfid: String) -> Self {
-        let mid = format!("{:x}", Md5::digest(dfid.as_bytes()));
+        let mid = hex::encode(Md5::digest(dfid.as_bytes()));
         let uuid_str = format!("{dfid}{mid}");
-        let uuid = format!("{:x}", Md5::digest(uuid_str.as_bytes()));
+        let uuid = hex::encode(Md5::digest(uuid_str.as_bytes()));
         let http_client = Client::new();
 
         Self {
@@ -141,7 +141,7 @@ impl KugouMusic {
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("User-Agent", KUGOU_ANDROID_USER_AGENT.parse().unwrap());
-        let header_mid = format!("{:x}", Md5::digest(b"-"));
+        let header_mid = hex::encode(Md5::digest(b"-"));
         headers.insert("mid", header_mid.parse().unwrap());
 
         let register_url = "https://userservice.kugou.com/risk/v1/r_register_dev";
@@ -322,7 +322,7 @@ impl KugouMusic {
 
         // 构建请求，并使用占位符身份设置 Header
         let url = "https://expendablekmr.kugou.com/container/v2/image";
-        let mid = format!("{:x}", md5::Md5::digest(b"-"));
+        let mid = hex::encode(Md5::digest(b"-"));
 
         let response = self
             .http_client
@@ -667,83 +667,6 @@ impl Provider for KugouMusic {
         }
     }
 
-    async fn get_song_link(&self, song_hash: &str) -> Result<String> {
-        let clienttime_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| LyricsHelperError::Internal(format!("时间错误: {e}")))?
-            .as_millis();
-        let userid = 0;
-
-        let inner_key = signature::sign_key(song_hash, &self.mid, userid, APP_ID, true);
-
-        let payload = models::SongUrlNewRequestPayload {
-            area_code: "1",
-            behavior: "play",
-            qualities: [
-                "128",
-                "320",
-                "flac",
-                "high",
-                "multitrack",
-                "viper_atmos",
-                "viper_tape",
-                "viper_clear",
-            ],
-            resource: models::Resource {
-                album_audio_id: None,
-                collect_list_id: "3",
-                collect_time: clienttime_ms,
-                hash: song_hash,
-                id: 0,
-                page_id: 1,
-                resource_type: "audio",
-            },
-            token: "",
-            tracker_param: models::TrackerParam {
-                all_m: 1,
-                auth: "",
-                is_free_part: 0,
-                key: inner_key,
-                module_id: 0,
-                need_climax: 1,
-                need_xcdn: 1,
-                open_time: "",
-                pid: "411",
-                pidversion: "3001",
-                priv_vip_type: "6",
-                viptoken: "",
-            },
-            userid: userid.to_string(),
-            vip_type: 0,
-        };
-
-        let url = "http://tracker.kugou.com/v6/priv_url";
-
-        let resp: models::SongUrlNewResponse = self
-            .execute_signed_post(url, &payload, Some(X_ROUTER_TRACKER))
-            .await?;
-
-        for data_item in &resp.data {
-            if let Some(goods) = data_item.relate_goods.first()
-                && let Some(url) = goods.info.climax_info.url.first()
-                && !url.is_empty()
-            {
-                return Ok(url.clone());
-            }
-        }
-
-        for data_item in &resp.data {
-            if let Some(url) = data_item.info.encrypted_urls.first()
-                && !url.is_empty()
-            {
-                warn!("只找到了加密的 mgg 格式链接，返回此链接。");
-                return Ok(url.clone());
-            }
-        }
-
-        Err(LyricsHelperError::LyricNotFound)
-    }
-
     /// 根据歌手ID获取其单曲列表。
     /// API: /kmr/v1/audio_group/author
     #[instrument(skip(self))]
@@ -965,6 +888,83 @@ impl Provider for KugouMusic {
             provider_id: song_data.hash,
             album_id: None,
         })
+    }
+
+    async fn get_song_link(&self, song_hash: &str) -> Result<String> {
+        let clienttime_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| LyricsHelperError::Internal(format!("时间错误: {e}")))?
+            .as_millis();
+        let userid = 0;
+
+        let inner_key = signature::sign_key(song_hash, &self.mid, userid, APP_ID, true);
+
+        let payload = models::SongUrlNewRequestPayload {
+            area_code: "1",
+            behavior: "play",
+            qualities: [
+                "128",
+                "320",
+                "flac",
+                "high",
+                "multitrack",
+                "viper_atmos",
+                "viper_tape",
+                "viper_clear",
+            ],
+            resource: models::Resource {
+                album_audio_id: None,
+                collect_list_id: "3",
+                collect_time: clienttime_ms,
+                hash: song_hash,
+                id: 0,
+                page_id: 1,
+                resource_type: "audio",
+            },
+            token: "",
+            tracker_param: models::TrackerParam {
+                all_m: 1,
+                auth: "",
+                is_free_part: 0,
+                key: inner_key,
+                module_id: 0,
+                need_climax: 1,
+                need_xcdn: 1,
+                open_time: "",
+                pid: "411",
+                pidversion: "3001",
+                priv_vip_type: "6",
+                viptoken: "",
+            },
+            userid: userid.to_string(),
+            vip_type: 0,
+        };
+
+        let url = "http://tracker.kugou.com/v6/priv_url";
+
+        let resp: models::SongUrlNewResponse = self
+            .execute_signed_post(url, &payload, Some(X_ROUTER_TRACKER))
+            .await?;
+
+        for data_item in &resp.data {
+            if let Some(goods) = data_item.relate_goods.first()
+                && let Some(url) = goods.info.climax_info.url.first()
+                && !url.is_empty()
+            {
+                return Ok(url.clone());
+            }
+        }
+
+        for data_item in &resp.data {
+            if let Some(url) = data_item.info.encrypted_urls.first()
+                && !url.is_empty()
+            {
+                warn!("只找到了加密的 mgg 格式链接，返回此链接。");
+                return Ok(url.clone());
+            }
+        }
+
+        Err(LyricsHelperError::LyricNotFound)
     }
 
     async fn get_album_cover_url(&self, album_id: &str, size: CoverSize) -> Result<String> {

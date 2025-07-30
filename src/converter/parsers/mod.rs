@@ -8,7 +8,7 @@ pub mod lqe_parser;
 pub mod lrc_parser;
 pub mod lyricify_lines_parser;
 pub mod lys_parser;
-pub mod musixmatch_parser;
+// pub mod musixmatch_parser;
 pub mod qrc_parser;
 pub mod spl_parser;
 pub mod ttml_parser;

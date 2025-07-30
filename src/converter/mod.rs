@@ -168,10 +168,10 @@ pub fn convert_single_lyric(
             &processed_data.lines,
             &metadata_store,
         ),
-        LyricFormat::Musixmatch => Err(ConvertError::Internal(format!(
-            "目前还不支持目标格式 '{:?}'",
-            input.target_format
-        ))),
+        // LyricFormat::Musixmatch => Err(ConvertError::Internal(format!(
+        //     "目前还不支持目标格式 '{:?}'",
+        //     input.target_format
+        // ))),
     }?;
 
     Ok(FullConversionResult {
@@ -252,7 +252,7 @@ fn parse_input_file(file: &InputFile) -> Result<ParsedSourceData, ConvertError> 
         LyricFormat::Spl => parsers::spl_parser::parse_spl(&file.content),
         LyricFormat::Lqe => parsers::lqe_parser::parse_lqe(&file.content),
         LyricFormat::Lyl => parsers::lyricify_lines_parser::parse_lyl(&file.content),
-        LyricFormat::Musixmatch => parsers::musixmatch_parser::parse(&file.content),
+        // LyricFormat::Musixmatch => parsers::musixmatch_parser::parse(&file.content),
     }
 }
 
@@ -278,12 +278,11 @@ fn merge_lyric_lines(
         return;
     }
 
-    let mut translations_map: HashMap<u64, Vec<crate::converter::types::TranslationEntry>> =
-        HashMap::new();
+    let mut translations_map: HashMap<u64, Vec<types::TranslationEntry>> = HashMap::new();
     for (trans_data, lang) in translations {
         for trans_line in &trans_data.lines {
             if let Some(text) = trans_line.line_text.clone() {
-                let entry = crate::converter::types::TranslationEntry {
+                let entry = types::TranslationEntry {
                     text,
                     lang: lang.clone(),
                 };
@@ -295,12 +294,11 @@ fn merge_lyric_lines(
         }
     }
 
-    let mut romanizations_map: HashMap<u64, Vec<crate::converter::types::RomanizationEntry>> =
-        HashMap::new();
+    let mut romanizations_map: HashMap<u64, Vec<types::RomanizationEntry>> = HashMap::new();
     for (roma_data, lang) in romanizations {
         for roma_line in &roma_data.lines {
             if let Some(text) = roma_line.line_text.clone() {
-                let entry = crate::converter::types::RomanizationEntry {
+                let entry = types::RomanizationEntry {
                     text,
                     lang: lang.clone(),
                     scheme: None,

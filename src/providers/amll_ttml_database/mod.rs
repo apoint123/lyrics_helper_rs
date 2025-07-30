@@ -230,12 +230,6 @@ impl Provider for AmllTtmlDatabase {
         Ok(results)
     }
 
-    /// 获取歌词。`song_id` 就是 TTML 文件名。
-    async fn get_lyrics(&self, song_id: &str) -> Result<ParsedSourceData> {
-        // 普通歌词和完整歌词没有区别，都返回最完整的 TTML 解析结果。
-        Ok(self.get_full_lyrics(song_id).await?.parsed)
-    }
-
     /// 获取并解析完整的 TTML 歌词文件。
     async fn get_full_lyrics(&self, song_id: &str) -> Result<FullLyricsResult> {
         let ttml_url = format!(
@@ -284,6 +278,12 @@ impl Provider for AmllTtmlDatabase {
             parsed: parsed_data,
             raw: raw_lyrics,
         })
+    }
+
+    /// 获取歌词。`song_id` 就是 TTML 文件名。
+    async fn get_lyrics(&self, song_id: &str) -> Result<ParsedSourceData> {
+        // 普通歌词和完整歌词没有区别，都返回最完整的 TTML 解析结果。
+        Ok(self.get_full_lyrics(song_id).await?.parsed)
     }
 
     async fn get_album_info(&self, _: &str) -> Result<generic::Album> {
@@ -470,7 +470,7 @@ mod tests {
 
         let provider = AmllTtmlDatabase {
             index: Arc::new(vec![index_entry.clone()]),
-            http_client: reqwest::Client::new(),
+            http_client: Client::new(),
         };
 
         (provider, index_entry)

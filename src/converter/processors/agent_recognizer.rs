@@ -71,7 +71,7 @@ pub fn recognize_agents(lines: &mut Vec<LyricLine>) {
 }
 
 /// 辅助函数：从 LyricLine 中获取用于匹配的纯文本。
-fn get_line_text<'a>(line: &'a LyricLine) -> Cow<'a, str> {
+fn get_line_text(line: &LyricLine) -> Cow<'_, str> {
     if let Some(text) = &line.line_text {
         Cow::Borrowed(text)
     } else {
