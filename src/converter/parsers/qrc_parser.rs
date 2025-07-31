@@ -9,7 +9,7 @@ use crate::converter::{
     types::{
         BackgroundSection, ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData,
     },
-    utils::parse_and_store_metadata,
+    utils::{parse_and_store_metadata, process_syllable_text},
 };
 
 /// 匹配 QRC 行级时间戳 `[start,duration]`
@@ -39,13 +39,8 @@ fn parse_qrc_line_raw(line_str: &str, line_num: usize) -> Result<(bool, LyricLin
         .parse()
         .map_err(ConvertError::ParseInt)?;
 
-    let content_after_line_ts = if let Some(m) = line_ts_cap.get(0) {
-        &line_str[m.end()..]
-    } else {
-        return Err(ConvertError::InvalidLyricFormat(
-            "未能获取 QRC 行级时间戳的匹配项".into(),
-        ));
-    };
+    // unwrap 是安全的，因为 captures() 已确认匹配成功
+    let content_after_line_ts = &line_str[line_ts_cap.get(0).unwrap().end()..];
 
     let mut syllables: Vec<LyricSyllable> = Vec::new();
     let mut last_match_end = 0;
@@ -53,38 +48,26 @@ fn parse_qrc_line_raw(line_str: &str, line_num: usize) -> Result<(bool, LyricLin
     // 遍历所有音节时间戳，提取其前面的文本作为音节
     for captures in WORD_TIMESTAMP_REGEX.captures_iter(content_after_line_ts) {
         let full_tag_match = captures.get(0).unwrap();
-        let mut text_slice = &content_after_line_ts[last_match_end..full_tag_match.start()];
-        let syl_start_ms: u64 = captures["start"].parse().map_err(ConvertError::ParseInt)?;
-        let syl_duration_ms: u64 = captures["duration"]
-            .parse()
-            .map_err(ConvertError::ParseInt)?;
+        let raw_text_slice = &content_after_line_ts[last_match_end..full_tag_match.start()];
 
-        if text_slice.starts_with(' ') {
-            if let Some(last_syllable) = syllables.last_mut() {
-                last_syllable.ends_with_space = true;
-            }
-            text_slice = text_slice.trim_start();
-        }
+        if let Some((clean_text, ends_with_space)) =
+            process_syllable_text(raw_text_slice, &mut syllables)
+        {
+            let syl_start_ms: u64 = captures["start"].parse().map_err(ConvertError::ParseInt)?;
+            let syl_duration_ms: u64 = captures["duration"]
+                .parse()
+                .map_err(ConvertError::ParseInt)?;
 
-        let mut current_ends_with_space = false;
-        if text_slice.ends_with(' ') {
-            current_ends_with_space = true;
-            text_slice = text_slice.trim_end();
-        }
-
-        if !text_slice.is_empty() {
             syllables.push(LyricSyllable {
-                text: text_slice.to_string(),
+                text: clean_text,
                 start_ms: syl_start_ms,
                 end_ms: syl_start_ms + syl_duration_ms,
                 duration_ms: Some(syl_duration_ms),
-                ends_with_space: current_ends_with_space,
+                ends_with_space,
             });
         }
         last_match_end = full_tag_match.end();
     }
-
-    syllables.retain(|s| !s.text.is_empty());
 
     if syllables.is_empty() && !content_after_line_ts.trim().is_empty() {
         return Err(ConvertError::InvalidLyricFormat(format!(
@@ -140,7 +123,6 @@ pub fn parse_qrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
     let mut lines: Vec<LyricLine> = Vec::new();
     let mut raw_metadata: HashMap<String, Vec<String>> = HashMap::new();
     let mut warnings: Vec<String> = Vec::new();
-    let mut last_main_line_index: Option<usize> = None;
 
     for (i, line_str) in content.lines().enumerate() {
         let line_num = i + 1;
@@ -155,65 +137,50 @@ pub fn parse_qrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
             continue;
         }
 
-        // 解析歌词行
-        if QRC_LINE_TIMESTAMP_REGEX.is_match(trimmed_line) {
-            match parse_qrc_line_raw(trimmed_line, line_num) {
-                Ok((is_background, mut parsed_line)) => {
-                    if is_background {
-                        // 尝试关联到上一行主歌词
-                        if let Some(main_line_idx) =
-                            last_main_line_index.filter(|idx| lines.get_mut(*idx).is_some())
-                        {
-                            let main_line = &mut lines[main_line_idx];
-
-                            if main_line.background_section.is_none() {
-                                // 第一个背景行，正常关联，并移除括号
-                                for syl in &mut parsed_line.main_syllables {
-                                    syl.text = syl
-                                        .text
-                                        .trim_matches(|c| {
-                                            c == '(' || c == '（' || c == ')' || c == '）'
-                                        })
-                                        .to_string();
-                                }
-                                parsed_line.main_syllables.retain(|s| !s.text.is_empty());
-
-                                main_line.background_section = Some(BackgroundSection {
-                                    start_ms: parsed_line.start_ms,
-                                    end_ms: parsed_line.end_ms,
-                                    syllables: parsed_line.main_syllables,
-                                    ..Default::default()
-                                });
-                            } else {
-                                // 后续的背景行，提升为主歌词行，保留括号
-                                warnings.push(format!(
-                                    "第 {line_num} 行: 发现连续的背景行，将提升为主歌词行。"
-                                ));
-                                lines.push(parsed_line);
-                                last_main_line_index = Some(lines.len() - 1);
+        match parse_qrc_line_raw(trimmed_line, line_num) {
+            Ok((is_background, mut parsed_line)) => {
+                if is_background {
+                    if let Some(main_line) = lines.last_mut() {
+                        if main_line.background_section.is_none() {
+                            // 第一个背景行，正常关联，并移除括号
+                            for syl in &mut parsed_line.main_syllables {
+                                syl.text =
+                                    syl.text.trim_matches(['(', '（', ')', '）']).to_string();
                             }
+                            parsed_line.main_syllables.retain(|s| !s.text.is_empty());
+
+                            main_line.background_section = Some(BackgroundSection {
+                                start_ms: parsed_line.start_ms,
+                                end_ms: parsed_line.end_ms,
+                                syllables: parsed_line.main_syllables,
+                                ..Default::default()
+                            });
                         } else {
-                            // 孤立的背景行，也提升为主歌词行，保留括号
+                            // 后续的背景行，提升为主歌词行，保留括号
                             warnings.push(format!(
-                                "第 {line_num} 行: 在任何主歌词行之前发现背景行，将提升为主歌词行。"
+                                "第 {line_num} 行: 发现连续的背景行，将提升为主歌词行。"
                             ));
                             lines.push(parsed_line);
-                            last_main_line_index = Some(lines.len() - 1);
                         }
                     } else {
-                        // 主歌词行
+                        // 孤立的背景行，也提升为主歌词行，保留括号
+                        warnings.push(format!(
+                            "第 {line_num} 行: 在任何主歌词行之前发现背景行，将提升为主歌词行。"
+                        ));
                         lines.push(parsed_line);
-                        last_main_line_index = Some(lines.len() - 1);
                     }
-                }
-                Err(e) => {
-                    warnings.push(format!("第 {line_num} 行: 解析失败。错误: {e}"));
+                } else {
+                    // 主歌词行
+                    lines.push(parsed_line);
                 }
             }
-        } else {
-            warnings.push(format!("第 {line_num} 行: 未能识别的行格式。"));
+            Err(e) => {
+                warnings.push(format!("第 {line_num} 行: 解析失败，已跳过。错误: {e}"));
+            }
         }
     }
+
+    lines.sort_by_key(|l| l.start_ms);
 
     Ok(ParsedSourceData {
         lines,
@@ -223,4 +190,140 @@ pub fn parse_qrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
         is_line_timed_source: false,
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::converter::types::LyricSyllable;
+
+    fn new_syllable(text: &str, start: u64, end: u64, space: bool) -> LyricSyllable {
+        LyricSyllable {
+            text: text.to_string(),
+            start_ms: start,
+            end_ms: end,
+            duration_ms: Some(end - start),
+            ends_with_space: space,
+        }
+    }
+
+    #[test]
+    fn test_parse_simple_qrc_lines() {
+        let content = r#"
+        [ti:QRC Test]
+        [ar:Tester]
+        [100,500]Hello(100,200) world(300,300)
+        "#;
+        let result = parse_qrc(content).unwrap();
+
+        assert_eq!(
+            result.raw_metadata.get("ti"),
+            Some(&vec!["QRC Test".to_string()])
+        );
+        assert_eq!(
+            result.raw_metadata.get("ar"),
+            Some(&vec!["Tester".to_string()])
+        );
+
+        assert_eq!(result.lines.len(), 1);
+        let line1 = &result.lines[0];
+        assert_eq!(line1.start_ms, 100);
+        assert_eq!(line1.end_ms, 600);
+        assert_eq!(line1.main_syllables.len(), 2);
+        assert_eq!(
+            line1.main_syllables[0],
+            new_syllable("Hello", 100, 300, true)
+        );
+        assert_eq!(
+            line1.main_syllables[1],
+            new_syllable("world", 300, 600, false)
+        );
+    }
+
+    #[test]
+    fn test_associate_background_line() {
+        let content = "[100,500]Main(100,200) line(300,300)\n[600,200](Background)(600,200)";
+        let result = parse_qrc(content).unwrap();
+
+        assert_eq!(result.lines.len(), 1);
+        let line = &result.lines[0];
+
+        assert_eq!(line.main_syllables.len(), 2);
+
+        assert!(line.background_section.is_some());
+        let bg_section = line.background_section.as_ref().unwrap();
+        assert_eq!(bg_section.syllables.len(), 1);
+        assert_eq!(bg_section.syllables[0].text, "Background");
+    }
+
+    #[test]
+    fn test_promote_consecutive_background_lines() {
+        let content = "[100,200]Main(100,200)\n[300,200](BG 1)(300,200)\n[500,200](BG 2)(500,200)";
+        let result = parse_qrc(content).unwrap();
+
+        assert_eq!(result.lines.len(), 2);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("连续的背景行"));
+
+        let line1 = &result.lines[0];
+        assert_eq!(line1.main_syllables[0].text, "Main");
+        let bg1 = line1.background_section.as_ref().unwrap();
+        assert_eq!(bg1.syllables[0].text, "BG 1");
+
+        let line2 = &result.lines[1];
+        assert_eq!(line2.main_syllables[0].text, "(BG 2)");
+        assert!(line2.background_section.is_none());
+    }
+
+    #[test]
+    fn test_promote_orphan_background_line() {
+        let content = "[100,200](Orphan BG)(100,200)";
+        let result = parse_qrc(content).unwrap();
+
+        assert_eq!(result.lines.len(), 1);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("在任何主歌词行之前发现背景行"));
+
+        let line = &result.lines[0];
+        assert_eq!(line.main_syllables[0].text, "(Orphan BG)");
+    }
+
+    #[test]
+    fn test_sorting_of_out_of_order_lines() {
+        let content = "[1000,200]Second(1000,200)\n[100,200]First(100,200)";
+        let result = parse_qrc(content).unwrap();
+
+        assert_eq!(result.lines.len(), 2);
+        assert_eq!(result.lines[0].start_ms, 100);
+        assert_eq!(result.lines[1].start_ms, 1000);
+    }
+
+    #[test]
+    fn test_invalid_line_is_skipped_with_warning() {
+        let content = "This is not a valid line.\n[100,200]Valid(100,200)";
+        let result = parse_qrc(content).unwrap();
+
+        assert_eq!(result.lines.len(), 1);
+        assert_eq!(result.lines[0].main_syllables[0].text, "Valid");
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("解析失败"));
+    }
+
+    #[test]
+    fn test_use_of_process_syllable_text_logic() {
+        let content = "[100,500]Word1 (100,100) Word2(300,200)";
+        let result = parse_qrc(content).unwrap();
+
+        assert_eq!(result.lines.len(), 1);
+        let line = &result.lines[0];
+        assert_eq!(line.main_syllables.len(), 2);
+
+        let syl1 = &line.main_syllables[0];
+        assert_eq!(syl1.text, "Word1");
+        assert!(syl1.ends_with_space);
+
+        let syl2 = &line.main_syllables[1];
+        assert_eq!(syl2.text, "Word2");
+        assert!(!syl2.ends_with_space);
+    }
 }

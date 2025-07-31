@@ -7,7 +7,7 @@ use quick_xml::{
     events::attributes::AttrError as QuickXmlAttrError,
 };
 use serde::{Deserialize, Serialize};
-use strum_macros::EnumString;
+use strum_macros::{EnumIter, EnumString};
 use thiserror::Error;
 use tracing::warn;
 
@@ -88,7 +88,7 @@ impl std::error::Error for ParseCanonicalMetadataKeyError {}
 //=============================================================================
 
 /// 枚举：表示支持的歌词格式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, Serialize, Deserialize, EnumIter)]
 #[strum(ascii_case_insensitive)]
 #[derive(Default)]
 pub enum LyricFormat {
@@ -122,25 +122,6 @@ pub enum LyricFormat {
 }
 
 impl LyricFormat {
-    /// 返回所有支持的歌词格式的列表。
-    pub fn all() -> &'static [Self] {
-        &[
-            LyricFormat::Ass,
-            LyricFormat::Ttml,
-            LyricFormat::AppleMusicJson,
-            LyricFormat::Lys,
-            LyricFormat::Lrc,
-            LyricFormat::EnhancedLrc,
-            LyricFormat::Qrc,
-            LyricFormat::Yrc,
-            LyricFormat::Lyl,
-            LyricFormat::Spl,
-            LyricFormat::Lqe,
-            LyricFormat::Krc,
-            // LyricFormat::Musixmatch,
-        ]
-    }
-
     /// 将歌词格式枚举转换为对应的文件扩展名字符串。
     pub fn to_extension_str(self) -> &'static str {
         match self {
@@ -432,6 +413,28 @@ pub struct ParsedSourceData {
 /// 表示从ASS中提取的标记信息。
 /// 元组的第一个元素是原始行号，第二个元素是标记文本。
 pub type MarkerInfo = (usize, String);
+
+/// 定义 LYS 格式使用的歌词行属性。
+pub mod lys_properties {
+    /// 视图：未设置，人声：未设置
+    pub const UNSET_UNSET: u8 = 0;
+    /// 视图：左，人声：未设置
+    pub const UNSET_LEFT: u8 = 1;
+    /// 视图：右，人声：未设置
+    pub const UNSET_RIGHT: u8 = 2;
+    /// 视图：未设置，人声：主歌词
+    pub const MAIN_UNSET: u8 = 3;
+    /// 视图：左，人声：主歌词
+    pub const MAIN_LEFT: u8 = 4;
+    /// 视图：右，人声：主歌词
+    pub const MAIN_RIGHT: u8 = 5;
+    /// 视图：未设置，人声：背景
+    pub const BG_UNSET: u8 = 6;
+    /// 视图：左，人声：背景
+    pub const BG_LEFT: u8 = 7;
+    /// 视图：右，人声：背景
+    pub const BG_RIGHT: u8 = 8;
+}
 
 //=============================================================================
 // 7. 批量转换相关结构体

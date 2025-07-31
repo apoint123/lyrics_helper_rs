@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::converter::{
     processors::metadata_processor::MetadataStore,
-    types::{ConvertError, LyricLine, LyricSyllable},
+    types::{ConvertError, LyricLine, LyricSyllable, lys_properties},
 };
 
 /// LYS 生成的主入口函数。
@@ -19,10 +19,10 @@ pub fn generate_lys(
     for line in lines {
         if !line.main_syllables.is_empty() {
             let property = match line.agent.as_deref() {
-                // 如果 agent 是 "v2"，视为右。属性为 5 (背景:否, 视图:右)。
-                Some("v2") => 5,
-                // 其他任何情况，都默认视为左。属性为 4 (背景:否, 视图:左)。
-                Some(_) | None => 4,
+                // 如果 agent 是 "v2"，视为右。
+                Some("v2") => lys_properties::MAIN_RIGHT,
+                // 其他任何情况，都默认视为左。
+                Some(_) | None => lys_properties::MAIN_LEFT,
             };
             write!(lys_output, "[{property}]")?;
 
@@ -34,10 +34,10 @@ pub fn generate_lys(
             && !bg_section.syllables.is_empty()
         {
             let bg_property = match line.agent.as_deref() {
-                // agent "v2" -> 右。属性为 8 (背景:是, 视图:右)。
-                Some("v2") => 8,
-                // 其他情况 -> 左。属性为 7 (背景:是, 视图:左)。
-                Some(_) | None => 7,
+                // agent "v2" -> 右。
+                Some("v2") => lys_properties::BG_RIGHT,
+                // 其他情况 -> 左。
+                Some(_) | None => lys_properties::BG_LEFT,
             };
             write!(lys_output, "[{bg_property}]")?;
 
