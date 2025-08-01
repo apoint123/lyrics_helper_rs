@@ -691,12 +691,16 @@ impl QQMusic {
         {
             LyricFormat::Lrc
         } else {
-            let mut parsed_data = converter::types::ParsedSourceData::default();
-            parsed_data.source_name = "qq".to_string();
-            parsed_data.raw_metadata.insert(
+            let mut raw_metadata = std::collections::HashMap::new();
+            raw_metadata.insert(
                 "introduction".to_string(),
                 vec![main_lyrics_decrypted.clone()],
             );
+            let parsed_data = converter::types::ParsedSourceData {
+                source_name: "qq".to_string(),
+                raw_metadata,
+                ..Default::default()
+            };
             let raw_lyrics = RawLyrics {
                 format: "txt".to_string(),
                 content: main_lyrics_decrypted,

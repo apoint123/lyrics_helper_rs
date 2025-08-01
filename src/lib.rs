@@ -89,6 +89,76 @@ pub use crate::{
     model::track::{SearchResult, Track},
 };
 
+/// 支持的歌词提供商枚举
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ProviderName {
+    /// QQ音乐
+    QQMusic,
+    /// 网易云音乐
+    Netease,
+    /// 酷狗音乐
+    Kugou,
+    /// AMLL TTML 数据库
+    AmllTtmlDatabase,
+}
+
+impl ProviderName {
+    /// 获取提供商的字符串标识符
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProviderName::QQMusic => "qq",
+            ProviderName::Netease => "netease",
+            ProviderName::Kugou => "kugou",
+            ProviderName::AmllTtmlDatabase => "amll-ttml-database",
+        }
+    }
+
+    /// 从字符串标识符创建 ProviderName
+    pub fn try_from_str(s: &str) -> Option<Self> {
+        match s {
+            "qq" => Some(ProviderName::QQMusic),
+            "netease" => Some(ProviderName::Netease),
+            "kugou" => Some(ProviderName::Kugou),
+            "amll-ttml-database" => Some(ProviderName::AmllTtmlDatabase),
+            _ => None,
+        }
+    }
+
+    /// 获取所有支持的提供商
+    pub fn all() -> Vec<Self> {
+        vec![
+            ProviderName::QQMusic,
+            ProviderName::Netease,
+            ProviderName::Kugou,
+            ProviderName::AmllTtmlDatabase,
+        ]
+    }
+
+    /// 获取提供商的显示名称
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ProviderName::QQMusic => "QQ音乐",
+            ProviderName::Netease => "网易云音乐",
+            ProviderName::Kugou => "酷狗音乐",
+            ProviderName::AmllTtmlDatabase => "AMLL TTML 数据库",
+        }
+    }
+}
+
+impl std::fmt::Display for ProviderName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for ProviderName {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::try_from_str(s).ok_or_else(|| format!("不支持的提供商: {}", s))
+    }
+}
+
 use crate::{
     converter::types::{
         ConversionInput, ConversionOptions, FullConversionResult, ParsedSourceData,
@@ -112,7 +182,7 @@ pub struct LyricsHelper {
 }
 
 /// 定义歌词的搜索策略。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SearchMode {
     /// 按预设顺序依次搜索提供商。
     ///
@@ -126,10 +196,42 @@ pub enum SearchMode {
     Parallel,
     /// 只搜索一个特定的提供商。
     ///
-    /// 参数是提供商的名称 (例如, "netease", "qqmusic")。
-    Specific(String),
+    /// 参数是提供商的枚举值。
+    Specific(ProviderName),
     /// 在指定的一个提供商子集中并行搜索。
-    Subset(Vec<String>),
+    Subset(Vec<ProviderName>),
+}
+
+impl SearchMode {
+    /// 创建一个搜索特定提供商的模式
+    pub fn specific(provider: ProviderName) -> Self {
+        SearchMode::Specific(provider)
+    }
+
+    /// 创建一个搜索提供商子集的模式
+    pub fn subset(providers: Vec<ProviderName>) -> Self {
+        SearchMode::Subset(providers)
+    }
+
+    /// 创建一个只搜索网易云音乐的模式
+    pub fn netease_only() -> Self {
+        SearchMode::Specific(ProviderName::Netease)
+    }
+
+    /// 创建一个只搜索QQ音乐的模式
+    pub fn qq_only() -> Self {
+        SearchMode::Specific(ProviderName::QQMusic)
+    }
+
+    /// 创建一个只搜索酷狗音乐的模式
+    pub fn kugou_only() -> Self {
+        SearchMode::Specific(ProviderName::Kugou)
+    }
+
+    /// 创建一个只搜索AMLL TTML数据库的模式
+    pub fn amll_only() -> Self {
+        SearchMode::Specific(ProviderName::AmllTtmlDatabase)
+    }
 }
 
 impl Default for LyricsHelper {
@@ -463,22 +565,26 @@ fn get_providers_for_mode<'a>(
         SearchMode::Ordered | SearchMode::Parallel => {
             Ok(helper.providers.iter().map(|p| p.as_ref()).collect())
         }
-        SearchMode::Specific(name) => {
-            if let Some(provider) = helper.providers.iter().find(|p| p.name() == *name) {
+        SearchMode::Specific(provider_name) => {
+            let name_str = provider_name.as_str();
+            if let Some(provider) = helper.providers.iter().find(|p| p.name() == name_str) {
                 Ok(vec![provider.as_ref()])
             } else {
-                Err(LyricsHelperError::ProviderNotSupported(name.clone()))
+                Err(LyricsHelperError::ProviderNotSupported(
+                    name_str.to_string(),
+                ))
             }
         }
-        SearchMode::Subset(names) => {
+        SearchMode::Subset(provider_names) => {
+            let name_strs: Vec<&str> = provider_names.iter().map(|p| p.as_str()).collect();
             let selected_providers: Vec<_> = helper
                 .providers
                 .iter()
-                .filter(|p| names.contains(&p.name().to_string()))
+                .filter(|p| name_strs.contains(&p.name()))
                 .map(|p| p.as_ref())
                 .collect();
 
-            if selected_providers.is_empty() && !names.is_empty() {
+            if selected_providers.is_empty() && !provider_names.is_empty() {
                 tracing::warn!("在 Subset 模式下，没有找到任何一个指定的、已初始化的提供商。");
             }
             Ok(selected_providers)
@@ -667,11 +773,11 @@ mod integration_tests {
             album: Some("星夏"),
         };
 
-        let provider_to_test = "amll-ttml-database".to_string();
+        let provider_to_test = ProviderName::AmllTtmlDatabase;
 
         println!(
             "\n[INFO] 正在测试 [Specific] 模式 (提供商: {})",
-            provider_to_test
+            provider_to_test.as_str()
         );
         let result = helper
             .search_lyrics(&track_to_search, SearchMode::Specific(provider_to_test))
@@ -679,6 +785,39 @@ mod integration_tests {
             .expect("指定源搜索模式不应返回错误");
 
         assert!(result.is_some(), "在 AMLL TTML DB 中应能找到《星夏》");
+        let lyrics_data = result.unwrap();
+        assert!(!lyrics_data.parsed.lines.is_empty(), "获取到的歌词不应为空");
+        println!("成功获取到歌词！");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_search_lyrics_subset_mode() {
+        init_tracing();
+        let mut helper = LyricsHelper::new();
+        helper.load_providers().await.unwrap();
+
+        let track_to_search = Track {
+            title: Some("风来的夏天"),
+            artists: Some(&["小蓝背心"]),
+            album: None,
+        };
+
+        let providers_to_test = vec![ProviderName::Netease, ProviderName::QQMusic];
+
+        println!(
+            "\n[INFO] 正在测试 [Subset] 模式 (提供商: {:?})",
+            providers_to_test
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+        );
+        let result = helper
+            .search_lyrics(&track_to_search, SearchMode::Subset(providers_to_test))
+            .await
+            .expect("子集搜索模式不应返回错误");
+
+        assert!(result.is_some(), "在指定的提供商子集中应能找到歌词");
         let lyrics_data = result.unwrap();
         assert!(!lyrics_data.parsed.lines.is_empty(), "获取到的歌词不应为空");
         println!("成功获取到歌词！");

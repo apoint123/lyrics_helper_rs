@@ -11,13 +11,9 @@ use std::io::{self, Write};
 use lyrics_helper_rs::converter::processors::agent_recognizer;
 use lyrics_helper_rs::error::Result;
 use lyrics_helper_rs::model::track::Track;
-use lyrics_helper_rs::providers::{
-    Provider, kugou::KugouMusic, netease::NeteaseClient, qq::QQMusic,
-};
-use lyrics_helper_rs::search;
 use lyrics_helper_rs::{
+    LyricsHelper,
     converter::{self, processors::metadata_processor::MetadataStore, types::ConversionOptions},
-    providers::amll_ttml_database::AmllTtmlDatabase,
 };
 
 use tracing::{Level, error, info};
@@ -26,15 +22,9 @@ use tracing::{Level, error, info};
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
-    info!("正在初始化所有音乐提供商...");
-
-    let providers: Vec<Box<dyn Provider>> = vec![
-        Box::new(QQMusic::new().await?),
-        Box::new(NeteaseClient::new_default().await?),
-        Box::new(KugouMusic::new().await?),
-        Box::new(AmllTtmlDatabase::new().await?),
-    ];
-    info!("提供商初始化完成，共 {} 个。", providers.len());
+    info!("正在初始化...");
+    let mut helper = LyricsHelper::new();
+    helper.load_providers().await?;
 
     // 这里硬编码了一首歌作为示例。在实际应用中，这些信息来自用户输入或文件元数据。
     let track_to_search = Track {
@@ -48,8 +38,7 @@ async fn main() -> Result<()> {
         track_to_search.artists.unwrap_or_default().join(", ")
     );
 
-    let search_results =
-        search::search_track_in_providers(&providers, &track_to_search, true).await?;
+    let search_results = helper.search_track(&track_to_search).await?;
 
     if search_results.is_empty() {
         error!("在所有提供商中均未找到相关的歌词，程序退出。");
@@ -63,19 +52,13 @@ async fn main() -> Result<()> {
         "选择了来自 '{}' 的歌词 '{}'。正在获取歌词内容...",
         selected_result.provider_name, selected_result.title
     );
-    let chosen_provider = providers
-        .iter()
-        .find(|p| p.name() == selected_result.provider_name)
-        .ok_or_else(|| {
-            lyrics_helper_rs::error::LyricsHelperError::Internal(
-                "致命错误：找不到对应的提供商实例".into(),
-            )
-        })?;
     let song_id_for_lyrics = selected_result
         .provider_id_num
         .map(|id| id.to_string())
         .unwrap_or_else(|| selected_result.provider_id.clone());
-    let mut parsed_lyrics = chosen_provider.get_full_lyrics(&song_id_for_lyrics).await?;
+    let mut parsed_lyrics = helper
+        .get_full_lyrics(&selected_result.provider_name, &song_id_for_lyrics)
+        .await?;
     agent_recognizer::recognize_agents(&mut parsed_lyrics.parsed.lines);
     info!("歌词获取并解析成功！");
 
