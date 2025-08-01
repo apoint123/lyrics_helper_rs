@@ -86,18 +86,35 @@ pub fn convert_single_lyric(
     input: &ConversionInput,
     options: &ConversionOptions,
 ) -> Result<FullConversionResult, ConvertError> {
-    let mut source_data = parse_and_merge(input, options)?;
+    let source_data = parse_and_merge(input, options)?;
+
+    generate_from_parsed(
+        source_data,
+        input.target_format,
+        options,
+        &input.user_metadata_overrides,
+    )
+}
+
+/// 从已解析的源数据生成目标格式的歌词。
+pub fn generate_from_parsed(
+    source_data: ParsedSourceData,
+    target_format: LyricFormat,
+    options: &ConversionOptions,
+    user_metadata_overrides: &Option<HashMap<String, Vec<String>>>,
+) -> Result<FullConversionResult, ConvertError> {
     let mut processed_data = source_data.clone();
+    let mut final_source_data = source_data;
 
     let mut metadata_store = MetadataStore::new();
 
-    if let Some(overrides) = &input.user_metadata_overrides {
+    if let Some(overrides) = user_metadata_overrides {
         for (key, values) in overrides {
             for value in values {
                 let _ = metadata_store.add(key, value.clone());
             }
         }
-        source_data.raw_metadata = overrides.clone();
+        final_source_data.raw_metadata = overrides.clone();
     } else {
         for (key, values) in processed_data.raw_metadata.iter() {
             for value in values {
@@ -115,7 +132,7 @@ pub fn convert_single_lyric(
     let chinese_processor = ChineseConversionProcessor::new();
     chinese_processor.process(&mut processed_data.lines, &options.chinese_conversion);
 
-    let output_lyrics = match input.target_format {
+    let output_lyrics = match target_format {
         LyricFormat::Lrc => generators::lrc_generator::generate_lrc(
             &processed_data.lines,
             &metadata_store,
@@ -176,7 +193,7 @@ pub fn convert_single_lyric(
 
     Ok(FullConversionResult {
         output_lyrics,
-        source_data,
+        source_data: final_source_data,
     })
 }
 

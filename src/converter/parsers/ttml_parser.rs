@@ -332,11 +332,11 @@ pub fn parse_ttml(
 
         if let Event::Text(e) = &event
             && state.format_detection == FormatDetection::Undetermined
-            && let Ok(text) = e.decode()
-            && text.contains('\n')
-            && text.trim().is_empty()
         {
-            state.whitespace_nodes_with_newline += 1;
+            let bytes = e.as_ref();
+            if bytes.contains(&b'\n') && bytes.iter().all(|&b| b.is_ascii_whitespace()) {
+                state.whitespace_nodes_with_newline += 1;
+            }
         }
 
         if let Event::Start(e) = &event

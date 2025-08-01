@@ -80,7 +80,10 @@ pub mod search;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-use std::{collections::HashSet, pin::Pin};
+use std::{
+    collections::{HashMap, HashSet},
+    pin::Pin,
+};
 
 use futures::future;
 
@@ -160,8 +163,9 @@ impl std::str::FromStr for ProviderName {
 }
 
 use crate::{
-    converter::types::{
-        ConversionInput, ConversionOptions, FullConversionResult, ParsedSourceData,
+    converter::{
+        LyricFormat,
+        types::{ConversionInput, ConversionOptions, FullConversionResult, ParsedSourceData},
     },
     model::track::FullLyricsResult,
     providers::{
@@ -434,6 +438,27 @@ impl LyricsHelper {
         let options = options.clone();
         Ok(converter::convert_single_lyric(&input, &options)
             .expect("转换任务 panic 了！这不应该发生。"))
+    }
+
+    /// 从已解析的数据生成歌词，跳过解析步骤。
+    pub async fn generate_lyrics_from_parsed(
+        &self,
+        source_data: ParsedSourceData,
+        target_format: LyricFormat,
+        options: ConversionOptions,
+        user_metadata_overrides: Option<HashMap<String, Vec<String>>>,
+    ) -> Result<FullConversionResult> {
+        tokio::task::spawn_blocking(move || {
+            converter::generate_from_parsed(
+                source_data,
+                target_format,
+                &options,
+                &user_metadata_overrides,
+            )
+            .map_err(|e| LyricsHelperError::Parser(e.to_string()))
+        })
+        .await
+        .map_err(|e| LyricsHelperError::Internal(e.to_string()))?
     }
 
     /// 根据指定的策略搜索并获取歌词。
