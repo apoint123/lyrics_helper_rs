@@ -4,6 +4,7 @@ use crate::converter::processors::chinese_conversion_processor::convert;
 use crate::model::match_type::MatchScorable;
 use crate::model::match_type::{ArtistMatchType, DurationMatchType, NameMatchType};
 use crate::model::track::{MatchType, SearchResult, Track};
+use ferrous_opencc::config::BuiltinConfig;
 use std::collections::HashSet;
 
 pub(crate) fn compare_track(track: &Track, result: &SearchResult) -> MatchType {
@@ -70,8 +71,8 @@ fn compare_name(name1_opt: Option<&str>, name2_opt: Option<&str>) -> Option<Name
     let name1_raw = name1_opt?;
     let name2_raw = name2_opt?;
 
-    let name1_sc_lower = convert(name1_raw, "t2s.json").to_lowercase();
-    let name2_sc_lower = convert(name2_raw, "t2s.json").to_lowercase();
+    let name1_sc_lower = convert(name1_raw, BuiltinConfig::T2s).to_lowercase();
+    let name2_sc_lower = convert(name2_raw, BuiltinConfig::T2s).to_lowercase();
 
     if name1_sc_lower.trim() == name2_sc_lower.trim() {
         return Some(NameMatchType::Perfect);
@@ -165,11 +166,11 @@ where
 
     let list1: Vec<String> = list1_raw
         .iter()
-        .map(|s| convert(s.as_ref(), "t2s.json").to_lowercase())
+        .map(|s| convert(s.as_ref(), BuiltinConfig::T2s).to_lowercase())
         .collect();
     let list2: Vec<String> = list2_raw
         .iter()
-        .map(|s| convert(s.as_ref(), "t2s.json").to_lowercase())
+        .map(|s| convert(s.as_ref(), BuiltinConfig::T2s).to_lowercase())
         .collect();
 
     let set1: HashSet<&str> = list1.iter().map(|s| s.as_str()).collect();

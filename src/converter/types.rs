@@ -815,14 +815,40 @@ pub enum ChineseConversionMode {
     AddAsTranslation,
 }
 
+/// 为 ferrous_opencc::config::BuiltinConfig 提供扩展方法
+pub trait BuiltinConfigExt {
+    /// 推断配置对应的目标语言标签
+    fn deduce_lang_tag(self) -> Option<&'static str>;
+}
+
+impl BuiltinConfigExt for ferrous_opencc::config::BuiltinConfig {
+    fn deduce_lang_tag(self) -> Option<&'static str> {
+        use ferrous_opencc::config::BuiltinConfig;
+        match self {
+            BuiltinConfig::S2t
+            | BuiltinConfig::Jp2t
+            | BuiltinConfig::Hk2t
+            | BuiltinConfig::Tw2t => Some("zh-Hant"),
+            BuiltinConfig::S2tw | BuiltinConfig::S2twp | BuiltinConfig::T2tw => Some("zh-Hant-TW"),
+            BuiltinConfig::S2hk | BuiltinConfig::T2hk => Some("zh-Hant-HK"),
+            BuiltinConfig::T2s
+            | BuiltinConfig::Tw2s
+            | BuiltinConfig::Tw2sp
+            | BuiltinConfig::Hk2s => Some("zh-Hans"),
+            BuiltinConfig::T2jp => Some("ja"),
+        }
+    }
+}
+
 /// 简繁转换的配置选项
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChineseConversionOptions {
-    /// 指定要使用的 ferrous-opencc 配置文件名，例如 "s2t.json" 或 "s2hk.json"。
-    /// 当值为 `Some(string)` 且不为空时，功能启用。
-    pub config_name: Option<String>,
+    /// 指定要使用的 OpenCC 配置。
+    /// 当值为 `Some(config)` 时，功能启用。
+    pub config: Option<ferrous_opencc::config::BuiltinConfig>,
 
     /// 为翻译指定 BCP 47 语言标签，例如 "zh-Hant" 或 "zh-Hant-HK"。
+    /// 如果未指定，将根据配置自动推断。
     pub target_lang_tag: Option<String>,
 
     /// 指定转换模式，默认为直接替换

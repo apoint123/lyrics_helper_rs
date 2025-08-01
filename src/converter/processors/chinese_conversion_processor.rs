@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use crate::converter::types::{
-    ChineseConversionMode, ChineseConversionOptions, LyricLine, TranslationEntry,
+    BuiltinConfigExt, ChineseConversionMode, ChineseConversionOptions, LyricLine, TranslationEntry,
 };
 use dashmap::DashMap;
 use ferrous_opencc::OpenCC;
+use ferrous_opencc::config::BuiltinConfig;
 use pinyin::ToPinyin;
 use std::sync::LazyLock;
 use tracing::{error, warn};
@@ -22,26 +23,26 @@ static CONVERTER_CACHE: LazyLock<DashMap<String, Arc<OpenCC>>> = LazyLock::new(D
 ///
 /// # 参数
 /// * `text` - 需要转换的文本。
-/// * `config_name` - `ferrous-opencc` 的配置文件名，例如 "s2t.json"。
+/// * `config` - OpenCC 配置枚举。
 ///
 /// # 返回
 /// 转换后的字符串。如果指定的配置加载失败，将打印错误日志并返回原始文本。
-pub fn convert(text: &str, config_name: &str) -> String {
+pub fn convert(text: &str, config: BuiltinConfig) -> String {
+    let cache_key = config.to_filename();
+
     // 检查缓存中是否已存在该转换器
-    if let Some(converter) = CONVERTER_CACHE.get(config_name) {
+    if let Some(converter) = CONVERTER_CACHE.get(cache_key) {
         return converter.convert(text);
     }
 
     // 如果缓存中没有，则尝试创建并插入
     match CONVERTER_CACHE
-        .entry(config_name.to_string())
+        .entry(cache_key.to_string())
         .or_try_insert_with(|| {
-            OpenCC::from_config_name(config_name)
-                .map(Arc::new)
-                .map_err(|e| {
-                    error!("使用配置 '{}' 初始化 Opencc 时失败: {}", config_name, e);
-                    e // 将错误传递出去，or_try_insert_with 需要
-                })
+            OpenCC::from_config(config).map(Arc::new).map_err(|e| {
+                error!("使用配置 '{:?}' 初始化 Opencc 时失败: {}", config, e);
+                e // 将错误传递出去，or_try_insert_with 需要
+            })
         }) {
         Ok(converter_ref) => converter_ref.value().convert(text),
         Err(_) => {
@@ -90,49 +91,35 @@ impl ChineseConversionProcessor {
     /// * `lines` - 一个可变的歌词行切片，转换结果将直接写入其中。
     /// * `options` - 简繁转换的配置选项，决定是否执行以及执行何种模式的转换。
     pub fn process(&self, lines: &mut [LyricLine], options: &ChineseConversionOptions) {
-        let Some(config_name) = &options.config_name else {
+        let Some(config) = options.config else {
             return;
         };
-        if config_name.is_empty() {
-            return;
-        }
 
         match options.mode {
             ChineseConversionMode::AddAsTranslation => {
-                self.add_as_translation(lines, config_name, options);
+                self.add_as_translation(lines, config, options);
             }
             ChineseConversionMode::Replace => {
-                self.replace(lines, config_name);
+                self.replace(lines, config);
             }
-        }
-    }
-
-    fn deduce_lang_tag_from_config<'a>(&self, config_name: &'a str) -> Option<&'a str> {
-        match config_name {
-            "s2t.json" | "jp2t.json" | "hk2t.json" | "tw2t.json" => Some("zh-Hant"),
-            "s2tw.json" | "s2twp.json" | "t2tw.json" => Some("zh-Hant-TW"),
-            "s2hk.json" | "t2hk.json" => Some("zh-Hant-HK"),
-            "t2s.json" | "tw2s.json" | "tw2sp.json" | "hk2s.json" => Some("zh-Hans"),
-            "t2jp.json" => Some("ja"),
-            _ => None,
         }
     }
 
     fn add_as_translation(
         &self,
         lines: &mut [LyricLine],
-        config_name: &str,
+        config: BuiltinConfig,
         options: &ChineseConversionOptions,
     ) {
         let lang_tag = options
             .target_lang_tag
             .as_deref()
-            .or_else(|| self.deduce_lang_tag_from_config(config_name));
+            .or_else(|| config.deduce_lang_tag());
 
         let Some(target_lang_tag) = lang_tag else {
             warn!(
-                "无法确定 target_lang_tag (未提供且无法从 '{}' 推断)。跳过简繁转换。",
-                config_name
+                "无法确定 target_lang_tag (未提供且无法从 '{:?}' 推断)。跳过简繁转换。",
+                config
             );
             return;
         };
@@ -154,7 +141,7 @@ impl ChineseConversionProcessor {
                 };
 
                 if !main_text.is_empty() {
-                    let converted_text = convert(&main_text, config_name);
+                    let converted_text = convert(&main_text, config);
                     line.translations.push(TranslationEntry {
                         text: converted_text,
                         lang: Some(target_lang_tag.to_string()),
@@ -164,7 +151,7 @@ impl ChineseConversionProcessor {
         }
     }
 
-    fn replace(&self, lines: &mut [LyricLine], config_name: &str) {
+    fn replace(&self, lines: &mut [LyricLine], config: BuiltinConfig) {
         for line in lines.iter_mut() {
             if !line.main_syllables.is_empty() {
                 let original_syllable_texts: Vec<String> =
@@ -175,7 +162,7 @@ impl ChineseConversionProcessor {
                     continue;
                 }
 
-                let converted_full_text = convert(&full_line_text, config_name);
+                let converted_full_text = convert(&full_line_text, config);
 
                 if pinyin_is_same(&full_line_text, &converted_full_text) {
                     let mut converted_chars = converted_full_text.chars();
@@ -199,7 +186,7 @@ impl ChineseConversionProcessor {
                         }
 
                         let original_text = &syllable.text;
-                        let converted_text_syllable = convert(original_text, config_name);
+                        let converted_text_syllable = convert(original_text, config);
 
                         if pinyin_is_same(original_text, &converted_text_syllable) {
                             syllable.text = converted_text_syllable;
@@ -208,7 +195,7 @@ impl ChineseConversionProcessor {
                                 .chars()
                                 .map(|c| {
                                     let mut char_str = [0u8; 4];
-                                    convert(c.encode_utf8(&mut char_str), config_name)
+                                    convert(c.encode_utf8(&mut char_str), config)
                                 })
                                 .collect();
 
@@ -235,7 +222,7 @@ impl ChineseConversionProcessor {
             } else if let Some(text) = line.line_text.as_mut()
                 && !text.is_empty()
             {
-                let converted_text = convert(text, config_name);
+                let converted_text = convert(text, config);
                 if pinyin_is_same(text, &converted_text) {
                     *text = converted_text;
                 } else {
@@ -243,7 +230,7 @@ impl ChineseConversionProcessor {
                         .chars()
                         .map(|c| {
                             let mut char_str = [0u8; 4];
-                            convert(c.encode_utf8(&mut char_str), config_name)
+                            convert(c.encode_utf8(&mut char_str), config)
                         })
                         .collect();
 
@@ -262,6 +249,7 @@ impl ChineseConversionProcessor {
 mod tests {
     use super::*;
     use crate::converter::types::{ChineseConversionMode, LyricLine, LyricSyllable};
+    use ferrous_opencc::config::BuiltinConfig;
 
     fn new_line(text: &str) -> LyricLine {
         LyricLine {
@@ -284,14 +272,11 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_function_simple_and_fallback() {
+    fn test_convert_function_simple() {
         let text = "简体中文";
-        let valid_config = "s2t.json";
-        let invalid_config = "non_existent_config.json";
-        let converted_text = convert(text, valid_config);
+        let config = BuiltinConfig::S2t;
+        let converted_text = convert(text, config);
         assert_eq!(converted_text, "簡體中文");
-        let fallback_text = convert(text, invalid_config);
-        assert_eq!(fallback_text, text);
     }
 
     #[test]
@@ -299,7 +284,7 @@ mod tests {
         let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_line("我是简体字。")];
         let options = ChineseConversionOptions {
-            config_name: Some("s2t.json".to_string()),
+            config: Some(BuiltinConfig::S2t),
             mode: ChineseConversionMode::Replace,
             ..Default::default()
         };
@@ -312,7 +297,7 @@ mod tests {
         let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_syllable_line(vec!["简体", "中文"])];
         let options = ChineseConversionOptions {
-            config_name: Some("s2t.json".to_string()),
+            config: Some(BuiltinConfig::S2t),
             mode: ChineseConversionMode::Replace,
             ..Default::default()
         };
@@ -330,7 +315,7 @@ mod tests {
         let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_syllable_line(vec!["我的", "内存"])];
         let options = ChineseConversionOptions {
-            config_name: Some("s2twp.json".to_string()),
+            config: Some(BuiltinConfig::S2twp),
             mode: ChineseConversionMode::Replace,
             ..Default::default()
         };
@@ -352,7 +337,7 @@ mod tests {
         let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_line("鼠标和键盘")];
         let options = ChineseConversionOptions {
-            config_name: Some("s2twp.json".to_string()),
+            config: Some(BuiltinConfig::S2twp),
             mode: ChineseConversionMode::AddAsTranslation,
             target_lang_tag: None,
         };
@@ -376,7 +361,7 @@ mod tests {
         });
         let mut lines = vec![line];
         let options = ChineseConversionOptions {
-            config_name: Some("s2t.json".to_string()),
+            config: Some(BuiltinConfig::S2t),
             mode: ChineseConversionMode::AddAsTranslation,
             target_lang_tag: None,
         };
@@ -386,11 +371,11 @@ mod tests {
     }
 
     #[test]
-    fn test_add_translation_mode_skip_if_lang_cannot_be_deduced() {
+    fn test_add_translation_mode_skip_if_config_is_none() {
         let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_line("一些文字")];
         let options = ChineseConversionOptions {
-            config_name: Some("一个无效的配置名".to_string()),
+            config: None,
             mode: ChineseConversionMode::AddAsTranslation,
             target_lang_tag: None,
         };
