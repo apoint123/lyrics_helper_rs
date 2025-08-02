@@ -252,3 +252,96 @@ fn test_parse_formatted_ttml() {
 //         "错误类型应该为 ConvertError::Xml"
 //     );
 // }
+
+#[test]
+fn test_parse_timed_romanization() {
+    let content = r#"
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xml:lang="ja">
+  <head>
+    <metadata>
+      <iTunesMetadata>
+        <transliterations>
+          <transliteration xml:lang="ja-Latn">
+            <text for="L1">
+              <span begin="1.0s" end="1.5s">Asa</span>
+              <span begin="1.6s" end="2.0s">mo</span>
+            </text>
+          </transliteration>
+        </transliterations>
+      </iTunesMetadata>
+    </metadata>
+  </head>
+  <body>
+    <p begin="1.0s" end="2.0s" itunes:key="L1">
+        <span begin="1.0s" end="1.5s">朝</span>
+        <span begin="1.6s" end="2.0s">も</span>
+    </p>
+  </body>
+</tt>
+"#;
+    let result = parse_ttml(content, &TtmlParsingOptions::default()).unwrap();
+
+    assert_eq!(result.lines.len(), 1, "应该解析出一行歌词");
+    let line = &result.lines[0];
+
+    assert_eq!(line.timed_romanizations.len(), 1, "应该有一组逐字罗马音");
+    let romanization_line = &line.timed_romanizations[0];
+
+    assert_eq!(
+        romanization_line.lang.as_deref(),
+        Some("ja-Latn"),
+        "罗马音语言应为 ja-Latn"
+    );
+    assert_eq!(romanization_line.syllables.len(), 2, "罗马音应该有两个音节");
+
+    assert_eq!(romanization_line.syllables[0].text, "Asa");
+    assert_eq!(romanization_line.syllables[0].start_ms, 1000);
+    assert_eq!(romanization_line.syllables[1].text, "mo");
+    assert_eq!(romanization_line.syllables[1].end_ms, 2000);
+}
+
+#[test]
+fn test_parse_timed_translation() {
+    let content = r#"
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xml:lang="zh-Hant">
+  <head>
+    <metadata>
+      <iTunesMetadata>
+        <translations>
+          <translation xml:lang="zh-Hans">
+            <text for="L1">
+              <span begin="28.140s" end="28.922s">钟声响起</span>
+              <span begin="28.922s" end="29.582s">归家</span>
+            </text>
+          </translation>
+        </translations>
+      </iTunesMetadata>
+    </metadata>
+  </head>
+  <body>
+    <p begin="28.140s" end="29.582s" itunes:key="L1">
+        <span begin="28.140s" end="29.582s">鐘聲響起歸家</span>
+    </p>
+  </body>
+</tt>
+"#;
+    let result = parse_ttml(content, &TtmlParsingOptions::default()).unwrap();
+
+    assert_eq!(result.lines.len(), 1, "应该解析出一行歌词");
+    let line = &result.lines[0];
+
+    assert_eq!(line.timed_translations.len(), 1, "应该有一组逐字翻译");
+    let translation_line = &line.timed_translations[0];
+
+    assert_eq!(
+        translation_line.lang.as_deref(),
+        Some("zh-Hans"),
+        "翻译语言应为 zh-Hans"
+    );
+    assert_eq!(translation_line.syllables.len(), 2, "翻译应该有两个音节");
+
+    assert_eq!(translation_line.syllables[0].text, "钟声响起");
+    assert_eq!(translation_line.syllables[0].start_ms, 28140);
+    assert_eq!(translation_line.syllables[1].text, "归家");
+    assert_eq!(translation_line.syllables[1].end_ms, 29582);
+}

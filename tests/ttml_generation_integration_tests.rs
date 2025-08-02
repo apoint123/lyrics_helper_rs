@@ -2,7 +2,8 @@ use lyrics_helper_rs::converter::{
     generators::ttml_generator::generate_ttml,
     processors::metadata_processor::MetadataStore,
     types::{
-        CanonicalMetadataKey, LyricLine, LyricSyllable, TtmlGenerationOptions, TtmlTimingMode,
+        CanonicalMetadataKey, LyricLine, LyricSyllable, TimedAuxiliaryLine, TtmlGenerationOptions,
+        TtmlTimingMode,
     },
 };
 
@@ -133,5 +134,91 @@ fn test_auto_word_splitting_snapshot() {
 
     let ttml_output = generate_ttml(&lines, &Default::default(), &options).unwrap();
 
+    insta::assert_snapshot!(ttml_output);
+}
+
+#[test]
+fn test_generate_timed_romanization_snapshot() {
+    let lines = vec![LyricLine {
+        start_ms: 1000,
+        end_ms: 2000,
+        itunes_key: Some("L1".to_string()),
+        main_syllables: vec![LyricSyllable {
+            text: "朝も".to_string(),
+            start_ms: 1000,
+            end_ms: 2000,
+            ..Default::default()
+        }],
+        timed_romanizations: vec![TimedAuxiliaryLine {
+            lang: Some("ja-Latn".to_string()),
+            syllables: vec![
+                LyricSyllable {
+                    text: "Asa".to_string(),
+                    start_ms: 1000,
+                    end_ms: 1500,
+                    ..Default::default()
+                },
+                LyricSyllable {
+                    text: "mo".to_string(),
+                    start_ms: 1600,
+                    end_ms: 2000,
+                    ..Default::default()
+                },
+            ],
+        }],
+        ..Default::default()
+    }];
+
+    let options = TtmlGenerationOptions {
+        timing_mode: TtmlTimingMode::Word,
+        use_apple_format_rules: true,
+        format: true,
+        ..Default::default()
+    };
+
+    let ttml_output = generate_ttml(&lines, &Default::default(), &options).unwrap();
+    insta::assert_snapshot!(ttml_output);
+}
+
+#[test]
+fn test_generate_timed_translation_snapshot() {
+    let lines = vec![LyricLine {
+        start_ms: 1000,
+        end_ms: 2000,
+        itunes_key: Some("L1".to_string()),
+        main_syllables: vec![LyricSyllable {
+            text: "鐘聲響起歸家".to_string(),
+            start_ms: 1000,
+            end_ms: 2000,
+            ..Default::default()
+        }],
+        timed_translations: vec![TimedAuxiliaryLine {
+            lang: Some("zh-Hans".to_string()),
+            syllables: vec![
+                LyricSyllable {
+                    text: "钟声响起".to_string(),
+                    start_ms: 1000,
+                    end_ms: 1500,
+                    ..Default::default()
+                },
+                LyricSyllable {
+                    text: "归家".to_string(),
+                    start_ms: 1500,
+                    end_ms: 2000,
+                    ..Default::default()
+                },
+            ],
+        }],
+        ..Default::default()
+    }];
+
+    let options = TtmlGenerationOptions {
+        timing_mode: TtmlTimingMode::Word,
+        use_apple_format_rules: true,
+        format: true,
+        ..Default::default()
+    };
+
+    let ttml_output = generate_ttml(&lines, &Default::default(), &options).unwrap();
     insta::assert_snapshot!(ttml_output);
 }

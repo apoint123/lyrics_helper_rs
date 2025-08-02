@@ -98,102 +98,85 @@ pub fn convert_single_lyric(
 
 /// 从已解析的源数据生成目标格式的歌词。
 pub fn generate_from_parsed(
-    source_data: ParsedSourceData,
+    mut source_data: ParsedSourceData,
     target_format: LyricFormat,
     options: &ConversionOptions,
     user_metadata_overrides: &Option<HashMap<String, Vec<String>>>,
 ) -> Result<FullConversionResult, ConvertError> {
-    let mut processed_data = source_data.clone();
-    let mut final_source_data = source_data;
-
-    let mut metadata_store = MetadataStore::new();
+    let mut metadata_store = MetadataStore::from(&source_data);
 
     if let Some(overrides) = user_metadata_overrides {
         for (key, values) in overrides {
-            for value in values {
-                let _ = metadata_store.add(key, value.clone());
-            }
+            metadata_store.set_multiple(key, values.clone());
         }
-        final_source_data.raw_metadata = overrides.clone();
-    } else {
-        for (key, values) in processed_data.raw_metadata.iter() {
-            for value in values {
-                if metadata_store.add(key, value.clone()).is_err() {
-                    warn!(
-                        "元数据键 '{}' 无法被规范化，但其值 '{}' 仍被添加。",
-                        key, value
-                    );
-                }
-            }
-        }
+        source_data.raw_metadata = overrides.clone();
     }
+
     metadata_store.deduplicate_values();
 
     let chinese_processor = ChineseConversionProcessor::new();
-    chinese_processor.process(&mut processed_data.lines, &options.chinese_conversion);
+    chinese_processor.process(&mut source_data.lines, &options.chinese_conversion);
 
     let output_lyrics = match target_format {
         LyricFormat::Lrc => generators::lrc_generator::generate_lrc(
-            &processed_data.lines,
+            &source_data.lines,
             &metadata_store,
             &options.lrc,
         ),
         LyricFormat::EnhancedLrc => generators::enhanced_lrc_generator::generate_enhanced_lrc(
-            &processed_data.lines,
+            &source_data.lines,
             &metadata_store,
             &options.lrc,
         ),
         LyricFormat::Ass => generators::ass_generator::generate_ass(
-            &processed_data.lines,
+            &source_data.lines,
             &metadata_store,
             false,
             &options.ass,
         ),
         LyricFormat::Ttml => generators::ttml_generator::generate_ttml(
-            &processed_data.lines,
+            &source_data.lines,
             &metadata_store,
             &options.ttml,
         ),
         LyricFormat::AppleMusicJson => {
             generators::apple_music_json_generator::generate_apple_music_json(
-                &processed_data.lines,
+                &source_data.lines,
                 &metadata_store,
                 options,
             )
         }
         LyricFormat::Qrc => {
-            generators::qrc_generator::generate_qrc(&processed_data.lines, &metadata_store)
+            generators::qrc_generator::generate_qrc(&source_data.lines, &metadata_store)
         }
         LyricFormat::Lqe => generators::lqe_generator::generate_lqe(
-            &processed_data.lines,
+            &source_data.lines,
             &metadata_store,
             &options.lqe,
         ),
         LyricFormat::Krc => {
-            generators::krc_generator::generate_krc(&processed_data.lines, &metadata_store)
+            generators::krc_generator::generate_krc(&source_data.lines, &metadata_store)
         }
         LyricFormat::Yrc => {
-            generators::yrc_generator::generate_yrc(&processed_data.lines, &metadata_store)
+            generators::yrc_generator::generate_yrc(&source_data.lines, &metadata_store)
         }
         LyricFormat::Lys => {
-            generators::lys_generator::generate_lys(&processed_data.lines, &metadata_store)
+            generators::lys_generator::generate_lys(&source_data.lines, &metadata_store)
         }
         LyricFormat::Spl => {
-            generators::spl_generator::generate_spl(&processed_data.lines, &metadata_store)
+            generators::spl_generator::generate_spl(&source_data.lines, &metadata_store)
         }
-        LyricFormat::Lyl => generators::lyricify_lines_generator::generate_lyl(
-            &processed_data.lines,
-            &metadata_store,
-        ),
-        // LyricFormat::Musixmatch => Err(ConvertError::Internal(format!(
-        //     "目前还不支持目标格式 '{:?}'",
-        //     input.target_format
-        // ))),
+        LyricFormat::Lyl => {
+            generators::lyricify_lines_generator::generate_lyl(&source_data.lines, &metadata_store)
+        } // LyricFormat::Musixmatch => Err(ConvertError::Internal(format!(
+          //     "目前还不支持目标格式 '{:?}'",
+          //     input.target_format
+          // ))),
     }?;
 
     Ok(FullConversionResult {
         output_lyrics,
-        source_data: final_source_data,
+        source_data,
     })
 }
 
