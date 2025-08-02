@@ -96,6 +96,7 @@ pub fn strip_descriptive_metadata_lines(
         "词",
         "曲",
         "发行人",
+        "发行公司",
         "宣推",
         "录音制作",
         "制作发行",
