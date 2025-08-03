@@ -24,7 +24,7 @@ use crate::{
     },
     error::{LyricsHelperError, Result},
     model::{
-        generic::{self, CoverSize},
+        generic::{self, Artist, CoverSize},
         track::{FullLyricsResult, Language, RawLyrics, SearchResult},
     },
     providers::{Provider, qq::models::QQMusicCoverSize},
@@ -962,8 +962,16 @@ impl From<&models::Song> for SearchResult {
 
         Self {
             title: s.name.clone(),
-            artists: s.singer.iter().map(|singer| singer.name.clone()).collect(),
+            artists: s
+                .singer
+                .iter()
+                .map(|singer| Artist {
+                    id: singer.mid.clone().unwrap_or_default(),
+                    name: singer.name.clone(),
+                })
+                .collect(),
             album: Some(s.album.name.clone()),
+            album_id: s.album.mid.clone(),
             duration: Some(s.interval * 1000),
             provider_id_num: s.id,
             cover_url: s
@@ -1037,10 +1045,8 @@ mod tests {
 
         let results = provider.search_songs(&track).await.unwrap();
         assert!(!results.is_empty(), "搜索结果不应为空");
-        assert!(
-            results.iter().any(|s| s.title.contains(TEST_SONG_NAME)
-                && s.artists.iter().any(|a| a == TEST_SINGER_NAME))
-        );
+        assert!(results.iter().any(|s| s.title.contains(TEST_SONG_NAME)
+            && s.artists.iter().any(|a| a.name == TEST_SINGER_NAME)));
     }
 
     #[tokio::test]

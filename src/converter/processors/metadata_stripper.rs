@@ -100,6 +100,7 @@ pub fn strip_descriptive_metadata_lines(
         "宣推",
         "录音制作",
         "制作发行",
+        "制作团队",
         "音乐制作",
         "录音师",
         "混音工程师",
@@ -153,6 +154,13 @@ pub fn strip_descriptive_metadata_lines(
         "鸣谢",
         "工作室",
         "特别企划",
+        "音频编辑",
+        "词曲协力",
+        "制作公司/OP",
+        "企划",
+        "宣传",
+        "统筹",
+        "推广",
         // --- 纯英文关键字 ---
         "OP",
         "SP",
@@ -301,6 +309,10 @@ pub fn strip_descriptive_metadata_lines(
         "母带后期制作人Mastering Producer",
         "母带后期处理工程师Mastering Engineer",
         "母带后期处理录音室Mastering Studio",
+        "制作人Music Producer",
+        "统筹Planning",
+        "营销推广Marketing",
+        "出品人Producer",
     ];
     let default_regex: &[&str] = &[
         "(?:【.*?未经.*?】|\\(.*?未经.*?\\)|「.*?未经.*?」|（.*?未经.*?）|『.*?未经.*?』)",

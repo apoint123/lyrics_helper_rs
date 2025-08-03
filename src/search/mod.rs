@@ -204,7 +204,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use crate::model::generic;
+    use crate::model::generic::{self, Artist};
     use crate::model::track::{FullLyricsResult, MatchType, Track};
     use crate::providers::Provider;
     use crate::providers::qq::QQMusic;
@@ -228,7 +228,10 @@ mod tests {
                 // Perfect
                 results.push(SearchResult {
                     title: "Song A".to_string(),
-                    artists: vec!["Artist A".to_string()],
+                    artists: vec![Artist {
+                        id: String::new(),
+                        name: "Artist A".to_string(),
+                    }],
                     album: Some("Album A".to_string()),
                     duration: Some(240000), // 4:00
                     provider_name: "provider_a".to_string(),
@@ -238,7 +241,10 @@ mod tests {
                 // High or PrettyHigh
                 results.push(SearchResult {
                     title: "Song A".to_string(),
-                    artists: vec!["Artist A".to_string()],
+                    artists: vec![Artist {
+                        id: String::new(),
+                        name: "Artist A".to_string(),
+                    }],
                     album: Some("Wrong Album".to_string()),
                     duration: Some(300000), // 5:00
                     provider_name: "provider_a".to_string(),
@@ -248,7 +254,10 @@ mod tests {
                 // 测试 finalize_single_provider_results 的去重
                 results.push(SearchResult {
                     title: "Song A".to_string(),
-                    artists: vec!["Artist A".to_string()],
+                    artists: vec![Artist {
+                        id: String::new(),
+                        name: "Artist A".to_string(),
+                    }],
                     album: Some("Album A".to_string()),
                     duration: Some(240000),
                     provider_name: "provider_a".to_string(),
@@ -260,7 +269,10 @@ mod tests {
                 // Low
                 results.push(SearchResult {
                     title: "Song A".to_string(),
-                    artists: vec!["Unknown Artist".to_string()],
+                    artists: vec![Artist {
+                        id: String::new(),
+                        name: "Unknown Artist".to_string(),
+                    }],
                     album: Some("Unknown Album".to_string()),
                     duration: Some(180000), // 3:00
                     provider_name: "provider_b".to_string(),
@@ -270,7 +282,10 @@ mod tests {
                 // None
                 results.push(SearchResult {
                     title: "Different Song".to_string(),
-                    artists: vec!["Different Artist".to_string()],
+                    artists: vec![Artist {
+                        id: String::new(),
+                        name: "Different Artist".to_string(),
+                    }],
                     album: Some("Different Album".to_string()),
                     duration: Some(240000),
                     provider_name: "provider_b".to_string(),

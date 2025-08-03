@@ -29,9 +29,9 @@ async fn main() -> Result<()> {
     // 这里硬编码了一首歌作为示例。在实际应用中，这些信息来自用户输入或文件元数据。
     let track_to_search = Track {
         title: Some("有点甜"),
-        artists: Some(&["汪苏泷"]),
+        artists: Some(&["汪苏泷", "BY2"]),
         album: Some("万有引力"),
-        duration: None,
+        duration: Some(235000),
     };
     info!(
         "准备搜索歌曲: '{}' - '{}'",
@@ -71,7 +71,14 @@ async fn main() -> Result<()> {
     metadata_store.set_single("title", selected_result.title.clone());
 
     info!("设置艺术家: {:?}", &selected_result.artists);
-    metadata_store.set_multiple("artist", selected_result.artists.clone());
+    metadata_store.set_multiple(
+        "artist",
+        selected_result
+            .artists
+            .iter()
+            .map(|a| a.name.clone())
+            .collect(),
+    );
 
     if let Some(album) = &selected_result.album {
         info!("设置专辑: {}", album);
@@ -104,27 +111,54 @@ fn prompt_user_for_selection(
     );
 
     for (index, result) in search_results.iter().enumerate() {
-        // 核心信息
-        let album_display = result.album.as_deref().unwrap_or("(无专辑信息)");
+        let artists_display = result
+            .artists
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         println!(
-            "  [{:2}] 来源: {:<10} | 匹配度: {:<15} | 标题: {} | 艺术家: {} | 专辑: {}",
+            "  [{:2}] 标题: {} | 艺术家: {}",
             index + 1,
-            result.provider_name,
-            format!("{:?}", result.match_type),
             result.title,
-            result.artists.join(", "),
-            album_display
+            artists_display
         );
 
-        // 详细 ID 信息
+        let album_display = result.album.as_deref().unwrap_or("N/A");
+        let album_id_display = result.album_id.as_deref().unwrap_or("N/A");
+        println!("       专辑: {} (ID: {})", album_display, album_id_display);
+
+        let duration_ms = result.duration.unwrap_or(0);
+        let duration_formatted = if duration_ms > 0 {
+            let total_secs = duration_ms / 1000;
+            format!("{:02}:{:02}", total_secs / 60, total_secs % 60)
+        } else {
+            "N/A".to_string()
+        };
+        let language_display = result
+            .language
+            .as_ref()
+            .map(|l| format!("{:?}", l))
+            .unwrap_or_else(|| "N/A".to_string());
+        println!(
+            "       来源: {:<10} | 匹配度: {:<15} | 时长: {} | 语言: {}",
+            result.provider_name,
+            format!("{:?}", result.match_type),
+            duration_formatted,
+            language_display
+        );
+
         let numeric_id_display = result
             .provider_id_num
             .map(|id| id.to_string())
             .unwrap_or_else(|| "N/A".to_string());
         println!(
-            "       详细信息: Provider ID: {} | 数字 ID: {}",
+            "       ID:   Provider ID: {} | 数字 ID: {}",
             result.provider_id, numeric_id_display
         );
+
+        let cover_url_display = result.cover_url.as_deref().unwrap_or("N/A");
+        println!("       封面: {}", cover_url_display);
 
         if index < search_results.len() - 1 {
             println!();
@@ -133,7 +167,7 @@ fn prompt_user_for_selection(
 
     loop {
         print!(
-            "请输入你想下载并转换的歌词编号 (1-{}): ",
+            "\n请输入你想下载并转换的歌词编号 (1-{}): ",
             search_results.len()
         );
         io::stdout().flush()?;

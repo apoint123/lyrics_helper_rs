@@ -222,6 +222,7 @@ impl NeteaseClient {
             .text()
             .await?;
 
+        // println!("\n{}\n", &response_text);
         serde_json::from_str::<R>(&response_text).map_err(LyricsHelperError::from)
     }
 
@@ -292,12 +293,22 @@ impl Provider for NeteaseClient {
             .into_iter()
             .map(|song| SearchResult {
                 title: song.name,
-                artists: song.artist_info.into_iter().map(|a| a.name).collect(),
+                artists: song
+                    .artist_info
+                    .into_iter()
+                    .map(|a| crate::model::generic::Artist {
+                        id: a.id.to_string(),
+                        name: a.name,
+                    })
+                    .collect(),
                 album: Some(song.album_info.name),
-                duration: Some(song.duration), // 网易云的 duration 单位是毫秒
+                album_id: Some(song.album_info.id.to_string()),
+                cover_url: song.album_info.pic_url,
+                duration: Some(song.duration),
                 provider_id: song.id.to_string(),
                 provider_name: self.name().to_string(),
                 provider_id_num: Some(song.id),
+                language: None,
                 ..Default::default()
             })
             .collect();
@@ -675,9 +686,9 @@ mod tests {
         );
         assert!(!results.is_empty(), "搜索结果不应为空");
 
-        let target_found = results
-            .iter()
-            .any(|s| s.title == TEST_SONG_NAME && s.artists.iter().any(|a| a == TEST_SINGER_NAME));
+        let target_found = results.iter().any(|s| {
+            s.title == TEST_SONG_NAME && s.artists.iter().any(|a| a.name == TEST_SINGER_NAME)
+        });
         assert!(
             target_found,
             "在搜索结果中未找到目标歌曲 '{} - {}'",

@@ -32,7 +32,7 @@ use crate::{
     error::{LyricsHelperError, Result},
     model::{
         generic::{self, CoverSize},
-        track::{FullLyricsResult, RawLyrics, SearchResult},
+        track::{FullLyricsResult, Language, RawLyrics, SearchResult},
     },
     providers::Provider,
 };
@@ -406,11 +406,11 @@ impl Provider for KugouMusic {
         business_params.insert("nocollect".to_string(), "0".to_string());
 
         let url = format!("{KUGOU_API_GATEWAY}/v3/search/song");
+
         let resp: models::SearchSongResponse = self
             .execute_signed_get(&url, business_params, Some(X_ROUTER_COMPLEX_SEARCH))
             .await?;
 
-        // 校验API状态码
         if resp.status != 1 || resp.err_code != Some(0) {
             let err_msg = resp.error.unwrap_or_else(|| "未知的 API 错误".to_string());
             return Err(LyricsHelperError::ApiError(format!(
@@ -423,28 +423,29 @@ impl Provider for KugouMusic {
             let results: Vec<SearchResult> = song_data
                 .info
                 .into_iter()
-                .filter_map(|song| {
-                    // 歌曲必须有 hash 才能被认为是有效结果，否则过滤掉
-                    let song_hash = song.hash?;
-                    Some(SearchResult {
-                        title: song.song_name.unwrap_or_default(),
-                        artists: song
-                            .singer_name
-                            .unwrap_or_default()
-                            .split('、')
-                            .map(String::from)
-                            .collect(),
-                        album: song.album_name,
-                        duration: Some(song.duration * 1000),
-                        provider_id: song_hash,
-                        provider_name: self.name().to_string(),
-                        ..Default::default()
-                    })
+                .map(|song| SearchResult {
+                    title: song.song_name,
+                    artists: song
+                        .singers
+                        .into_iter()
+                        .map(|singer| crate::model::generic::Artist {
+                            id: singer.id.to_string(),
+                            name: singer.name,
+                        })
+                        .collect(),
+                    album: Some(song.album_name),
+                    album_id: Some(song.album_id),
+                    duration: Some(song.duration * 1000),
+                    provider_id: song.file_hash,
+                    provider_name: self.name().to_string(),
+                    provider_id_num: Some(song.audio_id),
+                    cover_url: Some(song.image.replace("{size}", "400")),
+                    language: map_language(song.trans_param.and_then(|p| p.language)),
+                    ..Default::default()
                 })
                 .collect();
             Ok(results)
         } else {
-            // data字段不存在，返回一个空列表
             Ok(vec![])
         }
     }
@@ -987,6 +988,16 @@ impl Provider for KugouMusic {
     }
 }
 
+fn map_language(lang_str: Option<String>) -> Option<Language> {
+    lang_str.map(|s| match s.as_str() {
+        "国语" => Language::Chinese,
+        "英语" => Language::English,
+        "日语" => Language::Japanese,
+        "韩语" => Language::Korean,
+        _ => Language::Other,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::model::track::Track;
@@ -1063,7 +1074,8 @@ mod tests {
         let best_match = search_results
             .into_iter()
             .find(|s| {
-                s.title.contains(TEST_SONG_NAME) && s.artists.join("").contains(TEST_SINGER_NAME)
+                s.title.contains(TEST_SONG_NAME)
+                    && s.artists.iter().any(|a| a.name.contains(TEST_SINGER_NAME))
             })
             .expect("在搜索结果中未能找到目标歌曲。");
 

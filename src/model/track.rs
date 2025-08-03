@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::converter::types::ParsedSourceData;
+use crate::{converter::types::ParsedSourceData, model::generic::Artist};
 
 /// 代表搜索结果与原始查询元数据的匹配程度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Default)]
@@ -47,9 +47,11 @@ pub struct SearchResult {
     /// 搜索结果的歌曲标题。
     pub title: String,
     /// 搜索结果的艺术家列表。
-    pub artists: Vec<String>,
+    pub artists: Vec<Artist>,
     /// 搜索结果的专辑名。
     pub album: Option<String>,
+    /// 搜索结果的专辑ID。
+    pub album_id: Option<String>,
     /// 歌曲时长（毫秒）。
     pub duration: Option<u64>,
     /// 在其所在平台的唯一 ID（可能是字符串，如 hash 或 mid）。
@@ -87,6 +89,25 @@ pub struct FullLyricsResult {
     pub parsed: ParsedSourceData,
     /// 从提供商获取的原始歌词副本。
     pub raw: RawLyrics,
+}
+
+/// 代表一个包含歌词和其来源元数据的完整搜索结果。
+#[derive(Debug, Clone, Default)]
+pub struct LyricsAndMetadata {
+    /// 获取到的歌词详情，包括解析后和原始数据。
+    pub lyrics: FullLyricsResult,
+    /// 提供该歌词的的元数据。
+    pub source_track: SearchResult,
+}
+
+/// 代表一次完整的搜索操作的最终结果。
+/// 包含最佳歌词匹配和所有搜索候选项。
+#[derive(Debug, Clone, Default)]
+pub struct ComprehensiveSearchResult {
+    /// 包含最佳歌词及其来源元数据的结果。
+    pub primary_lyric_result: LyricsAndMetadata,
+    /// 初始搜索返回的所有候选项，按匹配度从高到低排序。
+    pub all_search_candidates: Vec<SearchResult>,
 }
 
 /// 歌曲的语言，目前只做了QQ音乐的

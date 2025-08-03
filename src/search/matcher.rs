@@ -9,7 +9,10 @@ use std::collections::HashSet;
 
 pub(crate) fn compare_track(track: &Track, result: &SearchResult) -> MatchType {
     let title_match = compare_name(track.title, Some(&result.title));
-    let artist_match = compare_artists(track.artists, Some(result.artists.as_slice()));
+
+    let result_artist_names: Vec<String> = result.artists.iter().map(|a| a.name.clone()).collect();
+    let artist_match = compare_artists(track.artists, Some(&result_artist_names));
+
     let album_match = compare_name(track.album, result.album.as_deref());
     let duration_match = compare_duration(track.duration, result.duration);
 

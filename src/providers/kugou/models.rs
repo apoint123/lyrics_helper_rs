@@ -48,36 +48,55 @@ pub struct SearchSongData {
 
 /// 代表一首歌曲的详细信息。
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct SongInfo {
     /// 歌曲的唯一文件哈希。这是最重要的ID。
-    #[serde(rename = "FileHash")]
-    pub hash: Option<String>,
+    pub file_hash: String,
 
     /// 歌曲名。
     #[serde(rename = "OriSongName")]
-    pub song_name: Option<String>,
-
-    /// 演唱者姓名。
-    #[serde(rename = "SingerName")]
-    pub singer_name: Option<String>,
+    pub song_name: String,
 
     /// 专辑名。
-    #[serde(rename = "AlbumName")]
-    pub album_name: Option<String>,
-
-    /// 包含歌曲名和演唱者的完整文件名。
-    #[serde(rename = "FileName")]
-    pub filename: Option<String>,
+    pub album_name: String,
 
     /// 歌曲时长，单位为秒 (s)。
-    #[serde(rename = "Duration")]
     pub duration: u64,
 
-    /// 歌曲组。
-    #[serde(rename = "Grp", default)]
-    pub group: Option<Vec<SongInfo>>,
+    /// 专辑的唯一ID。
+    #[serde(rename = "AlbumID")]
+    pub album_id: String,
+
+    /// 歌曲的数字ID。
+    #[serde(rename = "Audioid")]
+    pub audio_id: u64,
+
+    /// 包含 `{size}` 占位符的专辑封面图片 URL 模板。
+    pub image: String,
+
+    /// 歌手信息列表。
+    pub singers: Vec<SingerInfo>,
+
+    #[serde(rename = "trans_param")]
+    /// 包含语言等额外参数的结构。
+    pub trans_param: Option<TransParam>,
 }
 
+/// 歌手信息结构。
+#[derive(Debug, Deserialize)]
+pub struct SingerInfo {
+    /// 歌手的数字ID。
+    pub id: u64,
+    /// 歌手名。
+    pub name: String,
+}
+
+/// 包含语言等额外参数的结构。
+#[derive(Debug, Deserialize)]
+pub struct TransParam {
+    /// 语言，例如 "国语"。
+    pub language: Option<String>,
+}
 // =================================================================
 // 歌词搜索接口 (`/search`) 的模型
 // =================================================================

@@ -163,9 +163,14 @@ impl Provider for AmllTtmlDatabase {
             return Ok(vec![]);
         }
         let lower_title_to_search = title_to_search.to_lowercase();
-        let lower_artists_to_search: Option<Vec<String>> = track
-            .artists
-            .map(|a| a.iter().map(|s| s.to_lowercase()).collect());
+
+        let lower_artists_to_search: Option<Vec<String>> = track.artists.map(|artists| {
+            artists
+                .iter()
+                .map(|artist_name| artist_name.to_lowercase())
+                .collect()
+        });
+
         let lower_album_to_search: Option<String> = track.album.map(|a| a.to_lowercase());
 
         let mut candidates: Vec<IndexEntry> = self
@@ -220,7 +225,16 @@ impl Provider for AmllTtmlDatabase {
                     .get_meta_str("musicName")
                     .unwrap_or_default()
                     .to_string(),
-                artists: entry.get_meta_vec("artists").cloned().unwrap_or_default(),
+                artists: entry
+                    .get_meta_vec("artists")
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|name| crate::model::generic::Artist {
+                        id: String::new(),
+                        name,
+                    })
+                    .collect(),
                 album: entry.get_meta_str("album").map(String::from),
                 provider_name: self.name().to_string(),
                 ..Default::default()
@@ -499,7 +513,9 @@ mod tests {
         };
         let results2 = provider.search_songs(&search_query2).await.unwrap();
         assert_eq!(results2.len(), 1, "应该找到一个结果");
-        assert_eq!(results2[0].artists, vec!["李宇春", "丁肆Dicey"]);
+        let artist_names: Vec<String> =
+            results2[0].artists.iter().map(|a| a.name.clone()).collect();
+        assert_eq!(artist_names, vec!["李宇春", "丁肆Dicey"]);
 
         let search_query3 = Track {
             title: Some("明明"),
