@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
         title: Some("有点甜"),
         artists: Some(&["汪苏泷"]),
         album: Some("万有引力"),
+        duration: None,
     };
     info!(
         "准备搜索歌曲: '{}' - '{}'",

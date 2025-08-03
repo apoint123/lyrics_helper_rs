@@ -9,14 +9,9 @@ use std::collections::HashSet;
 
 pub(crate) fn compare_track(track: &Track, result: &SearchResult) -> MatchType {
     let title_match = compare_name(track.title, Some(&result.title));
-    let artists_vec = result
-        .artists
-        .iter()
-        .map(AsRef::as_ref)
-        .collect::<Vec<&str>>();
-    let artist_match = compare_artists(track.artists, Some(&artists_vec));
+    let artist_match = compare_artists(track.artists, Some(result.artists.as_slice()));
     let album_match = compare_name(track.album, result.album.as_deref());
-    let duration_match = compare_duration(None, result.duration);
+    let duration_match = compare_duration(track.duration, result.duration);
 
     let mut total_score = 0.0;
     total_score += title_match.get_score() as f64;

@@ -1,13 +1,13 @@
 //! 搜索模块
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use futures::future;
 use tracing::{debug, info, warn};
 
 use crate::{
     error::Result,
-    model::track::{SearchResult, Track},
+    model::track::{MatchType, SearchResult, Track},
     providers::Provider,
 };
 
@@ -69,18 +69,25 @@ pub async fn search_track_in_providers(
 }
 
 /// 对来自多个提供商的结果进行最终的排序和去重。
-fn finalize_multi_provider_results(mut results: Vec<SearchResult>) -> Vec<SearchResult> {
-    results.sort_unstable_by(|a, b| b.match_type.cmp(&a.match_type));
-
-    let mut unique_results = Vec::new();
-    let mut seen_keys = HashSet::new();
+fn finalize_multi_provider_results(results: Vec<SearchResult>) -> Vec<SearchResult> {
+    let mut best_results_map: HashMap<(String, String), SearchResult> = HashMap::new();
 
     for result in results {
         let key = (result.provider_name.clone(), result.provider_id.clone());
-        if seen_keys.insert(key) {
-            unique_results.push(result);
-        }
+
+        best_results_map
+            .entry(key)
+            .and_modify(|existing| {
+                if result.match_type > existing.match_type {
+                    *existing = result.clone();
+                }
+            })
+            .or_insert(result);
     }
+
+    let mut unique_results: Vec<SearchResult> = best_results_map.into_values().collect();
+
+    unique_results.sort_unstable_by(|a, b| b.match_type.cmp(&a.match_type));
 
     unique_results
 }
@@ -116,20 +123,24 @@ pub async fn search_track(
             title: track.title,
             artists: track.artists,
             album: track.album,
+            duration: track.duration,
         };
         execute_search_level(provider, &precise_query, track, &mut all_results).await;
     }
 
-    if !full_search && !all_results.is_empty() {
+    let has_perfect_match = all_results
+        .iter()
+        .any(|r| r.match_type == MatchType::Perfect);
+    if has_perfect_match || (!full_search && !all_results.is_empty()) {
         return Ok(finalize_single_provider_results(all_results));
     }
 
-    // 仅标题搜索 (作为备用方案)
     if track.title.is_some() {
         let title_only_query = Track {
             title: track.title,
             artists: None,
             album: track.album,
+            duration: track.duration,
         };
         execute_search_level(provider, &title_only_query, track, &mut all_results).await;
     }
@@ -165,20 +176,33 @@ async fn execute_search_level(
 }
 
 /// 对搜索结果进行排序和去重，返回最终的干净列表。
-fn finalize_single_provider_results(mut results: Vec<SearchResult>) -> Vec<SearchResult> {
-    results.sort_unstable_by(|a, b| b.match_type.cmp(&a.match_type));
-    let mut unique_results = Vec::new();
-    let mut seen_provider_ids = HashSet::new();
+fn finalize_single_provider_results(results: Vec<SearchResult>) -> Vec<SearchResult> {
+    let mut best_results_map: HashMap<String, SearchResult> = HashMap::new();
+
     for result in results {
-        if seen_provider_ids.insert(result.provider_id.clone()) {
-            unique_results.push(result);
-        }
+        let key = result.provider_id.clone();
+
+        best_results_map
+            .entry(key)
+            .and_modify(|existing| {
+                if result.match_type > existing.match_type {
+                    *existing = result.clone();
+                }
+            })
+            .or_insert(result);
     }
+
+    let mut unique_results: Vec<SearchResult> = best_results_map.into_values().collect();
+
+    unique_results.sort_unstable_by(|a, b| b.match_type.cmp(&a.match_type));
+
     unique_results
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::model::generic;
     use crate::model::track::{FullLyricsResult, MatchType, Track};
@@ -315,6 +339,7 @@ mod tests {
             title: Some("Song A"),
             artists: Some(&["Artist A"]),
             album: Some("Album A"),
+            duration: None,
         };
 
         // 我们只对 `search_track_in_providers` 的聚合、排序和去重逻辑感兴趣，
@@ -362,6 +387,7 @@ mod tests {
             title: Some("我怕来者不是你"),
             artists: Some(&["小蓝背心"]),
             album: Some("我怕来者不是你"),
+            duration: None,
         };
 
         let results = search_track(provider, &track, true).await.unwrap();

@@ -26,6 +26,7 @@
 //!         title: Some("灯火通明"),
 //!         artists: Some(&["小蓝背心"]),
 //!         album: None,
+//!         duration: None,
 //!     };
 //!     match helper.search_lyrics(&track_to_search, SearchMode::Ordered).await {
 //!         Ok(Some(lyrics)) => println!("获取歌词成功！共 {} 行。", lyrics.parsed.lines.len()),
@@ -670,6 +671,7 @@ mod integration_tests {
             title: Some("内向都是作曲家"),
             artists: Some(&["Yunomi"]),
             album: None,
+            duration: None,
         };
 
         let search_results = helper
@@ -748,6 +750,7 @@ mod integration_tests {
             title: Some("风来的夏天"),
             artists: Some(&["小蓝背心"]),
             album: None,
+            duration: None,
         };
 
         let result = helper
@@ -772,6 +775,7 @@ mod integration_tests {
             title: Some("人海经过"),
             artists: Some(&["小蓝背心"]),
             album: None,
+            duration: None,
         };
 
         let result = helper
@@ -796,6 +800,7 @@ mod integration_tests {
             title: Some("星夏"),
             artists: Some(&["小蓝背心"]),
             album: Some("星夏"),
+            duration: None,
         };
 
         let provider_to_test = ProviderName::AmllTtmlDatabase;
@@ -826,6 +831,7 @@ mod integration_tests {
             title: Some("风来的夏天"),
             artists: Some(&["小蓝背心"]),
             album: None,
+            duration: None,
         };
 
         let providers_to_test = vec![ProviderName::Netease, ProviderName::QQMusic];

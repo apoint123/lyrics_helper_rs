@@ -1032,6 +1032,7 @@ mod tests {
             title: Some(TEST_SONG_NAME),
             artists: Some(&[TEST_SINGER_NAME]),
             album: None,
+            duration: None,
         };
 
         let results = provider.search_songs(&track).await.unwrap();

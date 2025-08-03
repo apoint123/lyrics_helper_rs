@@ -484,6 +484,7 @@ mod tests {
             title: Some("明明"),
             artists: None,
             album: None,
+            duration: None,
         };
         let results1 = provider.search_songs(&search_query1).await.unwrap();
         assert_eq!(results1.len(), 1, "应该找到一个结果");
@@ -494,6 +495,7 @@ mod tests {
             title: Some("明明 (深爱着你) (Live)"),
             artists: Some(&["李宇春"]),
             album: None,
+            duration: None,
         };
         let results2 = provider.search_songs(&search_query2).await.unwrap();
         assert_eq!(results2.len(), 1, "应该找到一个结果");
@@ -503,6 +505,7 @@ mod tests {
             title: Some("明明"),
             artists: Some(&["丁肆dicey"]),
             album: None,
+            duration: None,
         };
         let results3 = provider.search_songs(&search_query3).await.unwrap();
         assert_eq!(results3.len(), 1, "大小写不敏感的搜索应该工作");
@@ -511,6 +514,7 @@ mod tests {
             title: Some("明明"),
             artists: Some(&["周杰伦"]),
             album: None,
+            duration: None,
         };
         let results4 = provider.search_songs(&search_query4).await.unwrap();
         assert!(results4.is_empty(), "用错误的艺术家应该搜索不到结果");
@@ -519,6 +523,7 @@ mod tests {
             title: Some("不爱"),
             artists: None,
             album: None,
+            duration: None,
         };
         let results5 = provider.search_songs(&search_query5).await.unwrap();
         assert!(results5.is_empty(), "用错误的歌曲名应该搜索不到结果");

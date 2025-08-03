@@ -35,6 +35,8 @@ pub struct Track<'a> {
     pub artists: Option<&'a [&'a str]>,
     /// 专辑名。
     pub album: Option<&'a str>,
+    /// 歌曲时长（毫秒）。
+    pub duration: Option<u64>,
 }
 
 /// 代表一个标准化的搜索结果条目。

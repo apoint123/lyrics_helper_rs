@@ -1055,6 +1055,7 @@ mod tests {
             title: Some(TEST_SONG_NAME),
             artists: Some(&[TEST_SINGER_NAME]),
             album: None,
+            duration: None,
         };
         let search_results = provider.search_songs(&search_track).await.unwrap();
         assert!(!search_results.is_empty(), "搜索应返回结果。");
