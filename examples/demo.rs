@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
         track_to_search.artists.unwrap_or_default().join(", ")
     );
 
-    let search_results = helper.search_track(&track_to_search).await?;
+    let search_results = helper.search_track(track_to_search).await?;
 
     if search_results.is_empty() {
         error!("在所有提供商中均未找到相关的歌词，程序退出。");
@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
         .map(|id| id.to_string())
         .unwrap_or_else(|| selected_result.provider_id.clone());
     let mut parsed_lyrics = helper
-        .get_full_lyrics(&selected_result.provider_name, &song_id_for_lyrics)
+        .get_full_lyrics(&selected_result.provider_name, &song_id_for_lyrics)?
         .await?;
     agent_recognizer::recognize_agents(&mut parsed_lyrics.parsed.lines);
     info!("歌词获取并解析成功！");

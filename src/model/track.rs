@@ -27,7 +27,7 @@ pub enum MatchType {
 }
 
 /// 代表一个可搜索的歌曲元数据，用作搜索函数的输入参数。
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Track<'a> {
     /// 歌曲标题。
     pub title: Option<&'a str>,
