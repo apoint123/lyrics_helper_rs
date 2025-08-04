@@ -829,87 +829,95 @@ fn handle_generic_span_end(
     warnings: &mut Vec<String>,
 ) -> Result<(), ConvertError> {
     if let (Some(start_ms), Some(end_ms)) = (ctx.start_ms, ctx.end_ms) {
-        // 如果 span 内有任何内容（包括纯空格），就处理它
-        if !text.is_empty() {
-            if start_ms > end_ms {
-                warnings.push(format!(
-                    "音节 '{}' 的时间戳无效 (start_ms {} > end_ms {}), 但仍会创建音节。",
-                    text.escape_debug(),
-                    start_ms,
-                    end_ms
-                ));
-            }
-
-            let p_data = state
-                .body_state
-                .current_p_element_data
-                .as_mut()
-                .ok_or_else(|| {
-                    ConvertError::Internal("在处理 span 时丢失了 p_data 上下文".to_string())
-                })?;
-            let was_within_bg = state
-                .body_state
-                .span_stack
-                .iter()
-                .any(|s| s.role == SpanRole::Background);
-            let trimmed_text = text.trim();
-
-            // 根据内容创建不同类型的音节
-            let syllable = if !trimmed_text.is_empty() {
-                state.text_processing_buffer.clear();
-                if was_within_bg {
-                    clean_parentheses_from_bg_text_into(
-                        trimmed_text,
-                        &mut state.text_processing_buffer,
-                    );
-                } else {
-                    normalize_text_whitespace_into(trimmed_text, &mut state.text_processing_buffer);
-                }
-
-                LyricSyllable {
-                    text: state.text_processing_buffer.clone(),
-                    start_ms,
-                    end_ms: end_ms.max(start_ms),
-                    duration_ms: Some(end_ms.saturating_sub(start_ms)),
-                    ends_with_space: text.ends_with(char::is_whitespace),
-                }
-            } else {
-                // Case B: 这是一个只包含空格的音节
-                LyricSyllable {
-                    text: " ".to_string(), // 规范化为单个空格
-                    start_ms,
-                    end_ms: end_ms.max(start_ms),
-                    duration_ms: Some(end_ms.saturating_sub(start_ms)),
-                    ends_with_space: false,
-                }
-            };
-
-            // 将创建好的音节添加到正确的列表中
-            let target_syllables = if was_within_bg {
-                p_data
-                    .background_section_accumulator
-                    .as_mut()
-                    .map(|bs| &mut bs.syllables)
-            } else {
-                Some(&mut p_data.syllables_accumulator)
-            };
-
-            if let Some(syllables) = target_syllables {
-                syllables.push(syllable);
-                state.body_state.last_syllable_info = LastSyllableInfo::EndedSyllable {
-                    was_background: was_within_bg,
-                };
-            }
+        if text.is_empty() {
+            return Ok(());
         }
-        // 如果 text.is_empty() (例如 <span ...></span>), 则自然忽略
-    } else if !text.trim().is_empty() {
-        // 在逐字模式下，span 内有文本但没有时间信息，发出警告
-        if !state.is_line_timing_mode {
+
+        if start_ms > end_ms {
             warnings.push(format!(
-                "逐字模式下，span缺少时间信息，文本 '{}' 被忽略。",
-                text.trim().escape_debug()
+                "音节 '{}' 的时间戳无效 (start_ms {} > end_ms {}), 但仍会创建音节。",
+                text.escape_debug(),
+                start_ms,
+                end_ms
             ));
         }
+
+        let p_data = state
+            .body_state
+            .current_p_element_data
+            .as_mut()
+            .ok_or_else(|| {
+                ConvertError::Internal("在处理 span 时丢失了 p_data 上下文".to_string())
+            })?;
+
+        let was_within_bg = state
+            .body_state
+            .span_stack
+            .iter()
+            .any(|s| s.role == SpanRole::Background);
+
+        let target_syllables: Option<&mut Vec<LyricSyllable>> = if was_within_bg {
+            p_data
+                .background_section_accumulator
+                .as_mut()
+                .map(|bs| &mut bs.syllables)
+        } else {
+            Some(&mut p_data.syllables_accumulator)
+        };
+
+        let Some(target_syllables) = target_syllables else {
+            return Ok(());
+        };
+
+        if text.starts_with(char::is_whitespace)
+            && !text.trim().is_empty()
+            && let Some(last_syl) = target_syllables.last_mut()
+            && !last_syl.ends_with_space
+        {
+            last_syl.ends_with_space = true;
+        }
+
+        let trimmed_text = text.trim();
+
+        let syllable_to_add = if !trimmed_text.is_empty() {
+            state.text_processing_buffer.clear();
+            if was_within_bg {
+                clean_parentheses_from_bg_text_into(
+                    trimmed_text,
+                    &mut state.text_processing_buffer,
+                );
+            } else {
+                normalize_text_whitespace_into(trimmed_text, &mut state.text_processing_buffer);
+            }
+
+            Some(LyricSyllable {
+                text: state.text_processing_buffer.clone(),
+                start_ms,
+                end_ms: end_ms.max(start_ms),
+                duration_ms: Some(end_ms.saturating_sub(start_ms)),
+                ends_with_space: text.ends_with(char::is_whitespace),
+            })
+        } else {
+            Some(LyricSyllable {
+                text: " ".to_string(),
+                start_ms,
+                end_ms: end_ms.max(start_ms),
+                duration_ms: Some(end_ms.saturating_sub(start_ms)),
+                ends_with_space: false,
+            })
+        };
+
+        if let Some(syllable) = syllable_to_add {
+            target_syllables.push(syllable);
+            state.body_state.last_syllable_info = LastSyllableInfo::EndedSyllable {
+                was_background: was_within_bg,
+            };
+        }
+    } else if !text.trim().is_empty() && !state.is_line_timing_mode {
+        warnings.push(format!(
+            "逐字模式下，span缺少时间信息，文本 '{}' 被忽略。",
+            text.trim().escape_debug()
+        ));
     }
 
     Ok(())
