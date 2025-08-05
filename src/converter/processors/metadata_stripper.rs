@@ -161,6 +161,7 @@ pub fn strip_descriptive_metadata_lines(
         "宣传",
         "统筹",
         "推广",
+        "出品/发行",
         // --- 纯英文关键字 ---
         "OP",
         "SP",

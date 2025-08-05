@@ -429,7 +429,6 @@ impl LyricsHelper {
 
     /// 从已解析的数据生成歌词，跳过解析步骤。
     pub async fn generate_lyrics_from_parsed(
-        &self,
         source_data: ParsedSourceData,
         target_format: LyricFormat,
         options: ConversionOptions,
