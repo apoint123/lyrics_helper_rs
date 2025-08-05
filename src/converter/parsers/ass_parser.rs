@@ -269,11 +269,9 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
     // 确定是逐字模式还是逐行模式
     let has_karaoke_tags = content.contains("{\\k");
 
-    let mut lines_map: HashMap<u64, Vec<LyricLine>> = HashMap::new();
+    let mut final_lines: Vec<LyricLine> = Vec::new();
     let mut raw_metadata: HashMap<String, Vec<String>> = HashMap::new();
     let mut warnings: Vec<String> = Vec::new();
-
-    let mut main_singer_agent: Option<String> = None;
 
     let mut in_events_section = false;
     let mut subtitle_line_num = 0;
@@ -328,29 +326,8 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
 
             let actor_info = parse_actor(actor_raw, style, subtitle_line_num, &mut warnings)?;
 
-            // 逐行模式下，跳过背景人声的翻译和罗马音
-            if !has_karaoke_tags && (style == "bg-ts" || style == "bg-roma") {
-                continue;
-            }
-
             match style {
                 "orig" | "default" => {
-                    // 逐行模式下过滤非主唱的逻辑
-                    if !has_karaoke_tags {
-                        if actor_info.is_background {
-                            continue;
-                        }
-                        if main_singer_agent.is_none()
-                            && let Some(agent) = &actor_info.agent
-                        {
-                            main_singer_agent = Some(agent.clone());
-                        }
-                        if actor_info.agent != main_singer_agent {
-                            continue;
-                        }
-                    }
-
-                    // 创建新的 LyricLine 对象
                     let mut new_line = LyricLine {
                         start_ms,
                         end_ms,
@@ -384,27 +361,23 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
                     }
 
                     if !actor_info.is_background {
-                        new_line.agent = if has_karaoke_tags {
-                            actor_info.agent
-                        } else {
-                            Some("v1".to_string())
-                        };
+                        new_line.agent = actor_info.agent;
                         new_line.song_part = actor_info.song_part;
                     }
 
-                    lines_map.entry(start_ms).or_default().push(new_line);
+                    final_lines.push(new_line);
                 }
                 "ts" | "trans" | "bg-ts" | "roma" | "bg-roma" => {
-                    if let Some(lines_vec) = lines_map.get_mut(&start_ms)
-                        && let Some(last_line) = lines_vec.last_mut()
-                    {
+                    if let Some(last_line) = final_lines.last_mut() {
+                        let is_bg_style = style.starts_with("bg-");
+
                         match style {
                             "ts" | "trans" | "bg-ts" => {
                                 let entry = TranslationEntry {
                                     text: text_content.to_string(),
                                     lang: actor_info.lang_code,
                                 };
-                                if style == "bg-ts" {
+                                if is_bg_style {
                                     let bg = last_line
                                         .background_section
                                         .get_or_insert_with(Default::default);
@@ -421,7 +394,7 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
                                     lang: actor_info.lang_code,
                                     scheme: None,
                                 };
-                                if style == "bg-roma" {
+                                if is_bg_style {
                                     let bg = last_line
                                         .background_section
                                         .get_or_insert_with(Default::default);
@@ -434,6 +407,10 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
                             }
                             _ => unreachable!(), // 已经被外层 match 覆盖
                         }
+                    } else {
+                        warnings.push(format!(
+                            "第 {subtitle_line_num} 行: 找到了一个翻译/音译行，但它前面没有任何主歌词行可以附加，已忽略。"
+                        ));
                     }
                 }
                 _ => {
@@ -449,8 +426,6 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
             ));
         }
     }
-
-    let mut final_lines: Vec<LyricLine> = lines_map.into_values().flatten().collect();
 
     for line in &mut final_lines {
         if !line.main_syllables.is_empty() && line.line_text.is_none() {
