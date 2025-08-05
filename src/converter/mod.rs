@@ -168,10 +168,7 @@ pub fn generate_from_parsed(
         }
         LyricFormat::Lyl => {
             generators::lyricify_lines_generator::generate_lyl(&source_data.lines, &metadata_store)
-        } // LyricFormat::Musixmatch => Err(ConvertError::Internal(format!(
-          //     "目前还不支持目标格式 '{:?}'",
-          //     input.target_format
-          // ))),
+        }
     }?;
 
     Ok(FullConversionResult {
@@ -193,18 +190,18 @@ pub fn parse_and_merge(
     input: &ConversionInput,
     options: &ConversionOptions,
 ) -> Result<ParsedSourceData, ConvertError> {
-    let mut main_parsed = parse_input_file(&input.main_lyric)?;
+    let mut main_parsed = parse_input_file(&input.main_lyric, options)?;
 
     let translation_parsed_data: Vec<_> = input
         .translations
         .iter()
-        .map(parse_input_file_with_lang)
+        .map(|f| parse_input_file_with_lang(f, options))
         .collect::<Result<_, _>>()?;
 
     let romanization_parsed_data: Vec<_> = input
         .romanizations
         .iter()
-        .map(parse_input_file_with_lang)
+        .map(|f| parse_input_file_with_lang(f, options))
         .collect::<Result<_, _>>()?;
 
     for (parsed, _lang) in translation_parsed_data
@@ -218,6 +215,7 @@ pub fn parse_and_merge(
         &mut main_parsed.lines,
         &translation_parsed_data,
         &romanization_parsed_data,
+        options.matching_strategy,
     );
 
     processors::metadata_stripper::strip_descriptive_metadata_lines(
@@ -235,14 +233,17 @@ pub fn parse_and_merge(
 /// 根据指定的格式解析单个歌词文件内容。
 ///
 /// 这是一个底层的分派函数。
-fn parse_input_file(file: &InputFile) -> Result<ParsedSourceData, ConvertError> {
+fn parse_input_file(
+    file: &InputFile,
+    options: &ConversionOptions,
+) -> Result<ParsedSourceData, ConvertError> {
     debug!("正在解析文件，格式为: {:?}", file.format);
     match file.format {
         LyricFormat::Lrc => parsers::lrc_parser::parse_lrc(&file.content),
         LyricFormat::EnhancedLrc => parsers::enhanced_lrc_parser::parse_enhanced_lrc(&file.content),
         LyricFormat::Krc => parsers::krc_parser::parse_krc(&file.content),
         LyricFormat::Ass => parsers::ass_parser::parse_ass(&file.content),
-        LyricFormat::Ttml => parsers::ttml_parser::parse_ttml(&file.content, &Default::default()),
+        LyricFormat::Ttml => parsers::ttml_parser::parse_ttml(&file.content, &options.ttml_parsing),
         LyricFormat::AppleMusicJson => {
             parsers::apple_music_json_parser::parse_apple_music_json(&file.content)
         }
@@ -250,17 +251,17 @@ fn parse_input_file(file: &InputFile) -> Result<ParsedSourceData, ConvertError> 
         LyricFormat::Yrc => parsers::yrc_parser::parse_yrc(&file.content),
         LyricFormat::Lys => parsers::lys_parser::parse_lys(&file.content),
         LyricFormat::Spl => parsers::spl_parser::parse_spl(&file.content),
-        LyricFormat::Lqe => parsers::lqe_parser::parse_lqe(&file.content),
+        LyricFormat::Lqe => parsers::lqe_parser::parse_lqe(&file.content, options),
         LyricFormat::Lyl => parsers::lyricify_lines_parser::parse_lyl(&file.content),
-        // LyricFormat::Musixmatch => parsers::musixmatch_parser::parse(&file.content),
     }
 }
 
 /// `parse_input_file` 的一个包装，同时返回解析数据和文件本身的语言标签。
 fn parse_input_file_with_lang(
     file: &InputFile,
+    options: &ConversionOptions,
 ) -> Result<(ParsedSourceData, Option<String>), ConvertError> {
-    Ok((parse_input_file(file)?, file.language.clone()))
+    Ok((parse_input_file(file, options)?, file.language.clone()))
 }
 
 /// 合并主歌词行与翻译、罗马音数据，将翻译和罗马音按时间戳插入到主歌词行中。
@@ -269,54 +270,191 @@ fn parse_input_file_with_lang(
 /// * `main_lines` - 主歌词行的可变引用，将被插入翻译和罗马音。
 /// * `translations` - 包含翻译歌词数据及其语言标签的元组切片。
 /// * `romanizations` - 包含罗马音歌词数据及其语言标签的元组切片。
+/// * `strategy` - 用于匹配主歌词行和辅助歌词行时间戳的策略。
 fn merge_lyric_lines(
     main_lines: &mut [LyricLine],
     translations: &[(ParsedSourceData, Option<String>)],
     romanizations: &[(ParsedSourceData, Option<String>)],
+    strategy: types::AuxiliaryLineMatchingStrategy,
 ) {
     if translations.is_empty() && romanizations.is_empty() {
         return;
     }
 
-    let mut translations_map: HashMap<u64, Vec<types::TranslationEntry>> = HashMap::new();
-    for (trans_data, lang) in translations {
-        for trans_line in &trans_data.lines {
-            if let Some(text) = trans_line.line_text.clone() {
-                let entry = types::TranslationEntry {
-                    text,
-                    lang: lang.clone(),
-                };
-                translations_map
-                    .entry(trans_line.start_ms)
-                    .or_default()
-                    .push(entry);
+    // 翻译合并逻辑
+    if !translations.is_empty() {
+        match strategy {
+            types::AuxiliaryLineMatchingStrategy::Exact => {
+                let mut map = std::collections::HashMap::new();
+                for (data, lang) in translations {
+                    for line in &data.lines {
+                        let entries = map.entry(line.start_ms).or_insert_with(Vec::new);
+                        if !line.translations.is_empty() {
+                            entries.extend_from_slice(&line.translations);
+                        } else if let Some(text) = &line.line_text {
+                            entries.push(types::TranslationEntry {
+                                text: text.clone(),
+                                lang: lang.clone(),
+                            });
+                        }
+                    }
+                }
+                for main_line in main_lines.iter_mut() {
+                    if let Some(entries) = map.get(&main_line.start_ms) {
+                        main_line.translations.extend_from_slice(entries);
+                    }
+                }
+            }
+            types::AuxiliaryLineMatchingStrategy::Tolerance { tolerance_ms } => {
+                for main_line in main_lines.iter_mut() {
+                    for (data, lang) in translations {
+                        for line in &data.lines {
+                            if (main_line.start_ms as i64 - line.start_ms as i64).unsigned_abs()
+                                <= tolerance_ms
+                            {
+                                if !line.translations.is_empty() {
+                                    main_line.translations.extend_from_slice(&line.translations);
+                                } else if let Some(text) = &line.line_text {
+                                    main_line.translations.push(types::TranslationEntry {
+                                        text: text.clone(),
+                                        lang: lang.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            types::AuxiliaryLineMatchingStrategy::SortedSync { tolerance_ms } => {
+                let mut all_aux_lines: Vec<_> = translations
+                    .iter()
+                    .flat_map(|(data, lang)| {
+                        data.lines.iter().map(move |line| (line, lang.clone()))
+                    })
+                    .collect();
+                all_aux_lines.sort_by_key(|(line, _)| line.start_ms);
+                let mut aux_iter = all_aux_lines.iter().peekable();
+
+                for main_line in main_lines.iter_mut() {
+                    while let Some((line, _)) = aux_iter.peek() {
+                        if line.start_ms + tolerance_ms < main_line.start_ms {
+                            aux_iter.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    for (line, lang) in aux_iter.clone() {
+                        if (line.start_ms as i64 - main_line.start_ms as i64).unsigned_abs()
+                            <= tolerance_ms
+                        {
+                            if !line.translations.is_empty() {
+                                main_line.translations.extend_from_slice(&line.translations);
+                            } else if let Some(text) = &line.line_text {
+                                main_line.translations.push(types::TranslationEntry {
+                                    text: text.clone(),
+                                    lang: lang.clone(),
+                                });
+                            }
+                        }
+                        if line.start_ms > main_line.start_ms + tolerance_ms {
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
 
-    let mut romanizations_map: HashMap<u64, Vec<types::RomanizationEntry>> = HashMap::new();
-    for (roma_data, lang) in romanizations {
-        for roma_line in &roma_data.lines {
-            if let Some(text) = roma_line.line_text.clone() {
-                let entry = types::RomanizationEntry {
-                    text,
-                    lang: lang.clone(),
-                    scheme: None,
-                };
-                romanizations_map
-                    .entry(roma_line.start_ms)
-                    .or_default()
-                    .push(entry);
+    // 罗马音合并逻辑
+    if !romanizations.is_empty() {
+        match strategy {
+            types::AuxiliaryLineMatchingStrategy::Exact => {
+                let mut map = std::collections::HashMap::new();
+                for (data, lang) in romanizations {
+                    for line in &data.lines {
+                        let entries = map.entry(line.start_ms).or_insert_with(Vec::new);
+                        if !line.romanizations.is_empty() {
+                            entries.extend_from_slice(&line.romanizations);
+                        } else if let Some(text) = &line.line_text {
+                            entries.push(types::RomanizationEntry {
+                                text: text.clone(),
+                                lang: lang.clone(),
+                                scheme: None,
+                            });
+                        }
+                    }
+                }
+                for main_line in main_lines.iter_mut() {
+                    if let Some(entries) = map.get(&main_line.start_ms) {
+                        main_line.romanizations.extend_from_slice(entries);
+                    }
+                }
             }
-        }
-    }
+            types::AuxiliaryLineMatchingStrategy::Tolerance { tolerance_ms } => {
+                for main_line in main_lines.iter_mut() {
+                    for (data, lang) in romanizations {
+                        for line in &data.lines {
+                            if (main_line.start_ms as i64 - line.start_ms as i64).unsigned_abs()
+                                <= tolerance_ms
+                            {
+                                if !line.romanizations.is_empty() {
+                                    main_line
+                                        .romanizations
+                                        .extend_from_slice(&line.romanizations);
+                                } else if let Some(text) = &line.line_text {
+                                    main_line.romanizations.push(types::RomanizationEntry {
+                                        text: text.clone(),
+                                        lang: lang.clone(),
+                                        scheme: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            types::AuxiliaryLineMatchingStrategy::SortedSync { tolerance_ms } => {
+                let mut all_aux_lines: Vec<_> = romanizations
+                    .iter()
+                    .flat_map(|(data, lang)| {
+                        data.lines.iter().map(move |line| (line, lang.clone()))
+                    })
+                    .collect();
+                all_aux_lines.sort_by_key(|(line, _)| line.start_ms);
+                let mut aux_iter = all_aux_lines.iter().peekable();
 
-    for main_line in main_lines.iter_mut() {
-        if let Some(trans_entries) = translations_map.get(&main_line.start_ms) {
-            main_line.translations.extend_from_slice(trans_entries);
-        }
-        if let Some(roma_entries) = romanizations_map.get(&main_line.start_ms) {
-            main_line.romanizations.extend_from_slice(roma_entries);
+                for main_line in main_lines.iter_mut() {
+                    while let Some((line, _)) = aux_iter.peek() {
+                        if line.start_ms + tolerance_ms < main_line.start_ms {
+                            aux_iter.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    for (line, lang) in aux_iter.clone() {
+                        if (line.start_ms as i64 - main_line.start_ms as i64).unsigned_abs()
+                            <= tolerance_ms
+                        {
+                            if !line.romanizations.is_empty() {
+                                main_line
+                                    .romanizations
+                                    .extend_from_slice(&line.romanizations);
+                            } else if let Some(text) = &line.line_text {
+                                main_line.romanizations.push(types::RomanizationEntry {
+                                    text: text.clone(),
+                                    lang: lang.clone(),
+                                    scheme: None,
+                                });
+                            }
+                        }
+                        if line.start_ms > main_line.start_ms + tolerance_ms {
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 }

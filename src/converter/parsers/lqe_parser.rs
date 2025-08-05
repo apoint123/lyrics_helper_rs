@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::converter::{
     merge_lyric_lines,
-    types::{ConvertError, InputFile, LyricFormat, ParsedSourceData},
+    types::{ConversionOptions, ConvertError, InputFile, LyricFormat, ParsedSourceData},
 };
 
 #[derive(Clone, Copy)]
@@ -17,7 +17,10 @@ enum ParseState {
 }
 
 /// 解析 LQR 格式内容到 `ParsedSourceData` 结构。
-pub fn parse_lqe(content: &str) -> Result<ParsedSourceData, ConvertError> {
+pub fn parse_lqe(
+    content: &str,
+    options: &ConversionOptions,
+) -> Result<ParsedSourceData, ConvertError> {
     if !content.trim_start().starts_with("[Lyricify Quick Export]") {
         return Err(ConvertError::InvalidLyricFormat(
             "文件缺少 [Lyricify Quick Export] 头部标记。".to_string(),
@@ -61,6 +64,7 @@ pub fn parse_lqe(content: &str) -> Result<ParsedSourceData, ConvertError> {
                 &current_block_content,
                 current_block_format,
                 current_block_lang,
+                options,
             )?;
 
             if let Some(result) = parsed_block_result {
@@ -95,6 +99,7 @@ pub fn parse_lqe(content: &str) -> Result<ParsedSourceData, ConvertError> {
         &current_block_content,
         current_block_format,
         current_block_lang,
+        options,
     )? {
         match current_state {
             ParseState::Lyrics => main_parsed_vec.push(result),
@@ -115,6 +120,7 @@ pub fn parse_lqe(content: &str) -> Result<ParsedSourceData, ConvertError> {
         &mut result.lines,
         &translation_parsed_vec,
         &pronunciation_parsed_vec,
+        options.matching_strategy,
     );
 
     for (data, _) in translation_parsed_vec
@@ -158,6 +164,7 @@ fn process_block(
     content: &str,
     format: LyricFormat,
     lang: Option<String>,
+    options: &ConversionOptions,
 ) -> Result<Option<(ParsedSourceData, Option<String>)>, ConvertError> {
     if content.trim().is_empty() {
         return Ok(None);
@@ -165,7 +172,7 @@ fn process_block(
 
     let input_file = InputFile::new(content.to_string(), format, lang.clone(), None);
 
-    let parsed_data = crate::converter::parse_input_file(&input_file)?;
+    let parsed_data = crate::converter::parse_input_file(&input_file, options)?;
 
     Ok(Some((parsed_data, lang)))
 }

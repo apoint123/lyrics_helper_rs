@@ -28,10 +28,13 @@
 //!         album: None,
 //!         duration: None,
 //!     };
-//!     match helper.search_lyrics(&track_to_search, SearchMode::Ordered).await {
-//!         Ok(Some(lyrics)) => println!("获取歌词成功！共 {} 行。", lyrics.parsed.lines.len()),
-//!         Ok(None) => println!("未找到任何可用的歌词。"),
-//!         Err(e) => eprintln!("发生错误: {}", e),
+//!     match helper.search_lyrics(track_to_search, SearchMode::Ordered) {
+//!         Ok(future) => match future.await {
+//!             Ok(Some(lyrics)) => println!("获取歌词成功！共 {} 行。", lyrics.lyrics.parsed.lines.len()),
+//!             Ok(None) => println!("未找到任何可用的歌词。"),
+//!             Err(e) => eprintln!("搜索歌词时发生错误: {}", e),
+//!         },
+//!         Err(e) => eprintln!("创建搜索任务时发生错误: {}", e),
 //!     }
 //! };
 //! ```
@@ -421,8 +424,7 @@ impl LyricsHelper {
         options: &ConversionOptions,
     ) -> Result<FullConversionResult> {
         let options = options.clone();
-        Ok(converter::convert_single_lyric(&input, &options)
-            .expect("转换任务 panic 了！这不应该发生。"))
+        Ok(converter::convert_single_lyric(&input, &options)?)
     }
 
     /// 从已解析的数据生成歌词，跳过解析步骤。

@@ -757,11 +757,37 @@ impl Default for LqeGenerationOptions {
     }
 }
 
+/// 定义辅助歌词（翻译、音译）与主歌词的匹配策略
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuxiliaryLineMatchingStrategy {
+    /// 精确匹配：要求时间戳完全相同。对时间差异敏感。
+    Exact,
+    /// 容差匹配：在预设的时间窗口内寻找匹配。
+    Tolerance {
+        /// 匹配时允许的最大时间差（毫秒）。
+        tolerance_ms: u64,
+    },
+    /// 同步匹配：假定主歌词和辅助歌词都按时间排序，使用双指针算法在时间窗口内匹配。
+    SortedSync {
+        /// 匹配时允许的最大时间差（毫秒）。
+        tolerance_ms: u64,
+    },
+}
+
+impl Default for AuxiliaryLineMatchingStrategy {
+    fn default() -> Self {
+        Self::SortedSync { tolerance_ms: 20 }
+    }
+}
+
 /// 统一管理所有格式的转换选项
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConversionOptions {
-    /// TTML 转换选项
+    /// TTML 生成选项
     pub ttml: TtmlGenerationOptions,
+    /// TTML 解析选项
+    #[serde(default)]
+    pub ttml_parsing: TtmlParsingOptions,
     /// LQE 转换选项
     #[serde(default)]
     pub lqe: LqeGenerationOptions,
@@ -775,6 +801,9 @@ pub struct ConversionOptions {
     /// 简繁转换选项
     #[serde(default)]
     pub chinese_conversion: ChineseConversionOptions,
+    /// 辅助歌词（如翻译）的匹配策略
+    #[serde(default)]
+    pub matching_strategy: AuxiliaryLineMatchingStrategy,
 }
 
 /// ASS 生成转换选项

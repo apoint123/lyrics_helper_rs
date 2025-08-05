@@ -17,7 +17,7 @@ pub struct Artist {
 }
 
 /// 代表一首歌曲的通用模型。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Song {
     /// 歌曲的唯一 ID (通常来自其所在平台)。
     pub id: String,
@@ -38,7 +38,7 @@ pub struct Song {
 }
 
 /// 代表一张专辑的通用模型。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Album {
     /// 专辑的唯一 ID。
     pub id: String,
@@ -59,7 +59,7 @@ pub struct Album {
 }
 
 /// 代表通用的封面图片尺寸
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum CoverSize {
     /// 缩略图 (通常 < 150px)
     Thumbnail,
@@ -70,7 +70,7 @@ pub enum CoverSize {
 }
 
 /// 代表一个歌单的通用模型。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Playlist {
     /// 歌单的唯一 ID。
     pub id: String,
