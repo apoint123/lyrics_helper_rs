@@ -22,49 +22,47 @@ pub fn generate_qrc(
             .tracks
             .iter()
             .find(|t| t.content_type == ContentType::Main)
+            && !main_track.content.words.is_empty()
         {
-            if !main_track.content.words.is_empty() {
-                writeln!(
-                    qrc_output,
-                    "[{},{}]{}",
-                    line.start_ms,
-                    line.end_ms.saturating_sub(line.start_ms),
-                    build_qrc_text_from_words(&main_track.content.words, false)?
-                )?;
-            }
+            writeln!(
+                qrc_output,
+                "[{},{}]{}",
+                line.start_ms,
+                line.end_ms.saturating_sub(line.start_ms),
+                build_qrc_text_from_words(&main_track.content.words, false)?
+            )?;
         }
         // 背景人声行
         if let Some(bg_track) = line
             .tracks
             .iter()
             .find(|t| t.content_type == ContentType::Background)
+            && !bg_track.content.words.is_empty()
         {
-            if !bg_track.content.words.is_empty() {
-                let bg_start_ms = bg_track
-                    .content
-                    .words
-                    .iter()
-                    .flat_map(|w| &w.syllables)
-                    .map(|s| s.start_ms)
-                    .min()
-                    .unwrap_or(line.start_ms);
-                let bg_end_ms = bg_track
-                    .content
-                    .words
-                    .iter()
-                    .flat_map(|w| &w.syllables)
-                    .map(|s| s.end_ms)
-                    .max()
-                    .unwrap_or(line.end_ms);
+            let bg_start_ms = bg_track
+                .content
+                .words
+                .iter()
+                .flat_map(|w| &w.syllables)
+                .map(|s| s.start_ms)
+                .min()
+                .unwrap_or(line.start_ms);
+            let bg_end_ms = bg_track
+                .content
+                .words
+                .iter()
+                .flat_map(|w| &w.syllables)
+                .map(|s| s.end_ms)
+                .max()
+                .unwrap_or(line.end_ms);
 
-                writeln!(
-                    qrc_output,
-                    "[{},{}]{}",
-                    bg_start_ms,
-                    bg_end_ms.saturating_sub(bg_start_ms),
-                    build_qrc_text_from_words(&bg_track.content.words, true)?
-                )?;
-            }
+            writeln!(
+                qrc_output,
+                "[{},{}]{}",
+                bg_start_ms,
+                bg_end_ms.saturating_sub(bg_start_ms),
+                build_qrc_text_from_words(&bg_track.content.words, true)?
+            )?;
         }
     }
 

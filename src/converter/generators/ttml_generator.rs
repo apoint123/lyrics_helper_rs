@@ -776,10 +776,10 @@ fn write_inline_auxiliary_track<W: std::io::Write>(
         .create_element("span")
         .with_attribute(("ttm:role", role));
 
-    if let Some(lang) = track.metadata.get(&TrackMetadataKey::Language) {
-        if !lang.is_empty() {
-            element_builder = element_builder.with_attribute(("xml:lang", lang.as_str()));
-        }
+    if let Some(lang) = track.metadata.get(&TrackMetadataKey::Language)
+        && !lang.is_empty()
+    {
+        element_builder = element_builder.with_attribute(("xml:lang", lang.as_str()));
     }
 
     let all_syllables: Vec<_> = track.words.iter().flat_map(|w| &w.syllables).collect();

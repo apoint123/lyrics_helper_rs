@@ -146,12 +146,12 @@ fn parse_syllables_from_line(
         return Vec::new();
     }
 
-    if let Some((first_word_time, _)) = time_tags.first() {
-        if line_start_ms != *first_word_time {
-            warnings.push(format!(
+    if let Some((first_word_time, _)) = time_tags.first()
+        && line_start_ms != *first_word_time
+    {
+        warnings.push(format!(
                 "第 {line_num} 行: 行时间戳 [{line_start_ms}] 与第一个音节时间戳 <{first_word_time}> 不匹配，已以后者为准。"
             ));
-        }
     }
 
     let mut syllables = Vec::new();
@@ -210,22 +210,21 @@ fn finalize_end_times(lines: &mut [LyricLine], _warnings: &mut Vec<String>) {
             .tracks
             .iter_mut()
             .find(|t| t.content_type == ContentType::Main)
+            && let Some(word) = main_track.content.words.first_mut()
         {
-            if let Some(word) = main_track.content.words.first_mut() {
-                if let Some(last_syllable) = word.syllables.last_mut() {
-                    if last_syllable.end_ms == 0 {
-                        let end_ms = next_line_start_ms
-                            .unwrap_or_else(|| last_syllable.start_ms + DEFAULT_LINE_DURATION_MS);
-                        last_syllable.end_ms = end_ms.max(last_syllable.start_ms);
-                        last_syllable.duration_ms =
-                            Some(last_syllable.end_ms.saturating_sub(last_syllable.start_ms));
-                    }
-                    current_line.end_ms = last_syllable.end_ms;
-                } else {
-                    current_line.end_ms = next_line_start_ms
-                        .unwrap_or_else(|| current_line.start_ms + DEFAULT_LINE_DURATION_MS)
-                        .max(current_line.start_ms);
+            if let Some(last_syllable) = word.syllables.last_mut() {
+                if last_syllable.end_ms == 0 {
+                    let end_ms = next_line_start_ms
+                        .unwrap_or_else(|| last_syllable.start_ms + DEFAULT_LINE_DURATION_MS);
+                    last_syllable.end_ms = end_ms.max(last_syllable.start_ms);
+                    last_syllable.duration_ms =
+                        Some(last_syllable.end_ms.saturating_sub(last_syllable.start_ms));
                 }
+                current_line.end_ms = last_syllable.end_ms;
+            } else {
+                current_line.end_ms = next_line_start_ms
+                    .unwrap_or_else(|| current_line.start_ms + DEFAULT_LINE_DURATION_MS)
+                    .max(current_line.start_ms);
             }
         }
     }

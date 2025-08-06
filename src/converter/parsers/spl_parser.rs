@@ -94,16 +94,16 @@ fn parse_syllables(
     }
 
     let raw_last_segment = &text[last_pos..];
-    if let Some((clean_text, _)) = process_syllable_text(raw_last_segment, &mut syllables) {
-        if !clean_text.is_empty() {
-            syllables.push(LyricSyllable {
-                text: clean_text,
-                start_ms: current_time,
-                end_ms: line_end_ms,
-                duration_ms: Some(line_end_ms.saturating_sub(current_time)),
-                ends_with_space: false,
-            });
-        }
+    if let Some((clean_text, _)) = process_syllable_text(raw_last_segment, &mut syllables)
+        && !clean_text.is_empty()
+    {
+        syllables.push(LyricSyllable {
+            text: clean_text,
+            start_ms: current_time,
+            end_ms: line_end_ms,
+            duration_ms: Some(line_end_ms.saturating_sub(current_time)),
+            ends_with_space: false,
+        });
     }
     Ok(syllables)
 }
@@ -138,19 +138,15 @@ pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
             let mut text_to_process = caps.get(3).map_or("", |m| m.as_str()).to_string();
 
             if let Some(last_ts_match) = SPL_ANY_TIMESTAMP_REGEX.find_iter(&text_to_process).last()
+                && last_ts_match.end() == text_to_process.len()
+                && let Some(ts_content) = SPL_ANY_TIMESTAMP_REGEX
+                    .captures(last_ts_match.as_str())
+                    .unwrap()
+                    .get(1)
+                && let Ok(ms) = parse_spl_timestamp_ms(ts_content.as_str())
             {
-                if last_ts_match.end() == text_to_process.len() {
-                    if let Some(ts_content) = SPL_ANY_TIMESTAMP_REGEX
-                        .captures(last_ts_match.as_str())
-                        .unwrap()
-                        .get(1)
-                    {
-                        if let Ok(ms) = parse_spl_timestamp_ms(ts_content.as_str()) {
-                            current_block.explicit_end_ms = Some(ms);
-                            text_to_process.truncate(last_ts_match.start());
-                        }
-                    }
-                }
+                current_block.explicit_end_ms = Some(ms);
+                text_to_process.truncate(last_ts_match.start());
             }
             current_block.main_text = text_to_process.trim_end().to_string();
 
@@ -164,10 +160,10 @@ pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
                     let mut next_timestamps = Vec::new();
                     if let Some(ts_str) = next_caps.get(1) {
                         for ts_cap in SPL_ANY_TIMESTAMP_REGEX.captures_iter(ts_str.as_str()) {
-                            if let Some(ts_content) = ts_cap.get(1) {
-                                if let Ok(ms) = parse_spl_timestamp_ms(ts_content.as_str()) {
-                                    next_timestamps.push(ms);
-                                }
+                            if let Some(ts_content) = ts_cap.get(1)
+                                && let Ok(ms) = parse_spl_timestamp_ms(ts_content.as_str())
+                            {
+                                next_timestamps.push(ms);
                             }
                         }
                     }

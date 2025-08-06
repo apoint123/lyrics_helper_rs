@@ -22,16 +22,15 @@ pub fn generate_lys(
             .tracks
             .iter()
             .find(|t| t.content_type == ContentType::Main)
+            && !main_track.content.words.is_empty()
         {
-            if !main_track.content.words.is_empty() {
-                let property = match line.agent.as_deref() {
-                    Some("v2") => lys_properties::MAIN_RIGHT,
-                    _ => lys_properties::MAIN_LEFT,
-                };
-                write!(lys_output, "[{property}]")?;
-                write_words_to_lys_string(&mut lys_output, &main_track.content.words, false)?;
-                writeln!(lys_output)?;
-            }
+            let property = match line.agent.as_deref() {
+                Some("v2") => lys_properties::MAIN_RIGHT,
+                _ => lys_properties::MAIN_LEFT,
+            };
+            write!(lys_output, "[{property}]")?;
+            write_words_to_lys_string(&mut lys_output, &main_track.content.words, false)?;
+            writeln!(lys_output)?;
         }
 
         // 背景人声行
@@ -39,18 +38,17 @@ pub fn generate_lys(
             .tracks
             .iter()
             .find(|t| t.content_type == ContentType::Background)
+            && !bg_track.content.words.is_empty()
         {
-            if !bg_track.content.words.is_empty() {
-                let bg_property = match line.agent.as_deref() {
-                    // agent "v2" -> 右。
-                    Some("v2") => lys_properties::BG_RIGHT,
-                    // 其他情况 -> 左。
-                    _ => lys_properties::BG_LEFT,
-                };
-                write!(lys_output, "[{bg_property}]")?;
-                write_words_to_lys_string(&mut lys_output, &bg_track.content.words, true)?;
-                writeln!(lys_output)?;
-            }
+            let bg_property = match line.agent.as_deref() {
+                // agent "v2" -> 右。
+                Some("v2") => lys_properties::BG_RIGHT,
+                // 其他情况 -> 左。
+                _ => lys_properties::BG_LEFT,
+            };
+            write!(lys_output, "[{bg_property}]")?;
+            write_words_to_lys_string(&mut lys_output, &bg_track.content.words, true)?;
+            writeln!(lys_output)?;
         }
     }
 

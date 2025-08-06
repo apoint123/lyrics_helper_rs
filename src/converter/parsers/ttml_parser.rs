@@ -1118,21 +1118,19 @@ fn finalize_p_element(
     state: &mut TtmlParserState,
     _warnings: &mut Vec<String>,
 ) {
-    if let Some(key) = &p_data.itunes_key {
-        if let Some(timed_tracks) = state.metadata_state.timed_track_map.get(key) {
-            if let Some(main_annotated_track) = p_data
-                .tracks_accumulator
-                .iter_mut()
-                .find(|at| at.content_type == ContentType::Main)
-            {
-                main_annotated_track
-                    .translations
-                    .extend(timed_tracks.translations.clone());
-                main_annotated_track
-                    .romanizations
-                    .extend(timed_tracks.romanizations.clone());
-            }
-        }
+    if let Some(key) = &p_data.itunes_key
+        && let Some(timed_tracks) = state.metadata_state.timed_track_map.get(key)
+        && let Some(main_annotated_track) = p_data
+            .tracks_accumulator
+            .iter_mut()
+            .find(|at| at.content_type == ContentType::Main)
+    {
+        main_annotated_track
+            .translations
+            .extend(timed_tracks.translations.clone());
+        main_annotated_track
+            .romanizations
+            .extend(timed_tracks.romanizations.clone());
     }
 
     if state.is_line_timing_mode {
@@ -1166,32 +1164,30 @@ fn finalize_p_element(
             annotated_track.translations.clear();
             annotated_track.romanizations.clear();
         }
-    } else if !p_data.line_text_accumulator.trim().is_empty() {
-        if let Some(main_annotated_track) = p_data
+    } else if !p_data.line_text_accumulator.trim().is_empty()
+        && let Some(main_annotated_track) = p_data
             .tracks_accumulator
             .iter_mut()
             .find(|at| at.content_type == ContentType::Main)
-        {
-            if main_annotated_track.content.words.is_empty() {
-                // 如果主轨道为空，但我们有未被span包裹的文本，则将此文本视为一个覆盖整个P标签时长的音节
-                normalize_text_whitespace_into(
-                    &p_data.line_text_accumulator,
-                    &mut state.text_processing_buffer,
-                );
-                if !state.text_processing_buffer.is_empty() {
-                    let syllable = LyricSyllable {
-                        text: state.text_processing_buffer.clone(),
-                        start_ms: p_data.start_ms,
-                        end_ms: p_data.end_ms,
-                        duration_ms: Some(p_data.end_ms.saturating_sub(p_data.start_ms)),
-                        ends_with_space: false,
-                    };
-                    main_annotated_track.content.words = vec![Word {
-                        syllables: vec![syllable],
-                        ..Default::default()
-                    }];
-                }
-            }
+        && main_annotated_track.content.words.is_empty()
+    {
+        // 如果主轨道为空，但我们有未被span包裹的文本，则将此文本视为一个覆盖整个P标签时长的音节
+        normalize_text_whitespace_into(
+            &p_data.line_text_accumulator,
+            &mut state.text_processing_buffer,
+        );
+        if !state.text_processing_buffer.is_empty() {
+            let syllable = LyricSyllable {
+                text: state.text_processing_buffer.clone(),
+                start_ms: p_data.start_ms,
+                end_ms: p_data.end_ms,
+                duration_ms: Some(p_data.end_ms.saturating_sub(p_data.start_ms)),
+                ends_with_space: false,
+            };
+            main_annotated_track.content.words = vec![Word {
+                syllables: vec![syllable],
+                ..Default::default()
+            }];
         }
     }
 
@@ -1255,17 +1251,16 @@ fn finalize_p_element(
         });
     }
 
-    if let Some(itunes_key) = p_data.itunes_key {
-        if let Some(main_track) = new_line
+    if let Some(itunes_key) = p_data.itunes_key
+        && let Some(main_track) = new_line
             .tracks
             .iter_mut()
             .find(|t| t.content_type == ContentType::Main)
-        {
-            main_track.content.metadata.insert(
-                TrackMetadataKey::Custom("itunes_key".to_string()),
-                itunes_key,
-            );
-        }
+    {
+        main_track.content.metadata.insert(
+            TrackMetadataKey::Custom("itunes_key".to_string()),
+            itunes_key,
+        );
     }
 
     let is_empty = new_line.tracks.iter().all(|at| {
