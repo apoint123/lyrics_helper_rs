@@ -3,7 +3,7 @@
 use regex::Regex;
 use std::{borrow::Cow, sync::LazyLock};
 
-use crate::converter::types::LyricLine;
+use crate::converter::types::{ContentType, LyricLine};
 
 /// 正则表达式，用于匹配行首的演唱者标记。
 /// 支持全角/半角括号和冒号，以及无括号的情况。
@@ -28,7 +28,7 @@ pub fn recognize_agents(lines: &mut Vec<LyricLine>) {
     let mut current_agent: Option<String> = None;
 
     for mut line in original_lines {
-        let full_text: Cow<str> = get_line_text(&line);
+        let full_text: String = get_text_from_main_track(&line).to_string();
 
         if let Some(captures) = AGENT_REGEX.captures(&full_text) {
             // 从多个捕获组中提取演唱者名称
@@ -39,11 +39,10 @@ pub fn recognize_agents(lines: &mut Vec<LyricLine>) {
                 .map(|m| m.as_str().trim().to_string());
 
             if let (Some(name), Some(full_match_capture)) = (agent_name, captures.get(0)) {
-                let full_match_str = full_match_capture.as_str().to_string();
+                let full_match_str = full_match_capture.as_str();
 
-                if let Some(remaining_text) = full_text.strip_prefix(&full_match_str) {
-                    let trimmed_remaining = remaining_text.trim();
-                    if trimmed_remaining.is_empty() {
+                if let Some(remaining_text) = full_text.strip_prefix(full_match_str) {
+                    if remaining_text.trim().is_empty() {
                         // 块模式: 如果标记后面没有文本，说明这只是一个标记行，用于标记后面行的演唱者
                         // 更新当前演唱者，并跳过此行
                         current_agent = Some(name);
@@ -52,7 +51,7 @@ pub fn recognize_agents(lines: &mut Vec<LyricLine>) {
                         // 行模式: 标记和歌词在同一行。
                         line.agent = Some(name.clone());
                         current_agent = Some(name); // 更新当前演唱者以备后续行继承
-                        clean_line_text(&mut line, &full_match_str);
+                        clean_text_in_main_track(&mut line, full_match_str);
                     }
                 }
             } else {
@@ -71,88 +70,121 @@ pub fn recognize_agents(lines: &mut Vec<LyricLine>) {
 }
 
 /// 辅助函数：从 LyricLine 中获取用于匹配的纯文本。
-fn get_line_text(line: &LyricLine) -> Cow<'_, str> {
-    if let Some(text) = &line.line_text {
-        Cow::Borrowed(text)
-    } else {
-        let collected_string: String = line
-            .main_syllables
+fn get_text_from_main_track(line: &LyricLine) -> Cow<'_, str> {
+    if let Some(main_annotated_track) = line
+        .tracks
+        .iter()
+        .find(|at| at.content_type == ContentType::Main)
+    {
+        let collected_string: String = main_annotated_track
+            .content
+            .words
             .iter()
+            .flat_map(|w| &w.syllables)
             .map(|s| s.text.as_str())
             .collect();
         Cow::Owned(collected_string)
+    } else {
+        Cow::Borrowed("")
     }
 }
 
-/// 辅助函数：从 LyricLine 的文本部分移除演唱者标记前缀。
-fn clean_line_text(line: &mut LyricLine, prefix_to_remove: &str) {
-    // 优先清理 main_syllables (如果存在)
-    if !line.main_syllables.is_empty() {
-        let mut len_to_remove = prefix_to_remove.len();
-        let mut syllables_to_drain = 0;
+/// 辅助函数：从主轨道的文本部分移除演唱者标记前缀。
+fn clean_text_in_main_track(line: &mut LyricLine, prefix_to_remove: &str) {
+    if let Some(main_annotated_track) = line
+        .tracks
+        .iter_mut()
+        .find(|at| at.content_type == ContentType::Main)
+    {
+        let main_content_track = &mut main_annotated_track.content;
+        let mut len_to_remove = prefix_to_remove.chars().count();
+        if len_to_remove == 0 {
+            return;
+        }
 
-        for syllable in &line.main_syllables {
-            if len_to_remove >= syllable.text.len() {
-                len_to_remove -= syllable.text.len();
-                syllables_to_drain += 1;
-            } else {
+        for word in &mut main_content_track.words {
+            if len_to_remove == 0 {
                 break;
             }
-        }
 
-        if syllables_to_drain > 0 {
-            line.main_syllables.drain(0..syllables_to_drain);
-        }
-
-        if len_to_remove > 0
-            && let Some(first_syllable) = line.main_syllables.get_mut(0)
-        {
-            if len_to_remove < first_syllable.text.len() {
-                first_syllable.text = first_syllable.text[len_to_remove..].to_string();
-            } else {
-                line.main_syllables.remove(0);
+            let mut syllables_to_drain = 0;
+            for syllable in &word.syllables {
+                let syllable_len = syllable.text.chars().count();
+                if len_to_remove >= syllable_len {
+                    len_to_remove -= syllable_len;
+                    syllables_to_drain += 1;
+                } else {
+                    break;
+                }
             }
-        }
-    }
 
-    // 确保 line_text (如果存在) 与清理后的状态保持同步
-    if let Some(text) = line.line_text.as_mut() {
-        if text.starts_with(prefix_to_remove) {
-            *text = text[prefix_to_remove.len()..].to_string();
-        } else {
-            // 如果 line_text 存在但没匹配 (可能是因为音节被清理了),
-            // 用清理后的音节重建它以保证数据是一样的。
-            if !line.main_syllables.is_empty() {
-                *text = line
-                    .main_syllables
-                    .iter()
-                    .map(|s| s.text.as_str())
-                    .collect();
+            if syllables_to_drain > 0 {
+                word.syllables.drain(0..syllables_to_drain);
+            }
+
+            if len_to_remove > 0
+                && let Some(first_syllable) = word.syllables.get_mut(0)
+            {
+                let first_syl_len = first_syllable.text.chars().count();
+                if len_to_remove < first_syl_len {
+                    first_syllable.text = first_syllable.text.chars().skip(len_to_remove).collect();
+                } else {
+                    word.syllables.remove(0);
+                }
+                len_to_remove = 0;
             }
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::converter::types::LyricSyllable;
+    use crate::converter::types::{
+        AnnotatedTrack, ContentType, LyricLine, LyricSyllable, LyricTrack, Word,
+    };
 
     fn new_line(text: &str) -> LyricLine {
+        let content_track = LyricTrack {
+            words: vec![Word {
+                syllables: vec![LyricSyllable {
+                    text: text.to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
         LyricLine {
-            line_text: Some(text.to_string()),
+            tracks: vec![AnnotatedTrack {
+                content_type: ContentType::Main,
+                content: content_track,
+                ..Default::default()
+            }],
             ..Default::default()
         }
     }
 
     fn new_syllable_line(syllables: Vec<&str>) -> LyricLine {
+        let content_track = LyricTrack {
+            words: vec![Word {
+                syllables: syllables
+                    .into_iter()
+                    .map(|s| LyricSyllable {
+                        text: s.to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
         LyricLine {
-            main_syllables: syllables
-                .into_iter()
-                .map(|s| LyricSyllable {
-                    text: s.to_string(),
-                    ..Default::default()
-                })
-                .collect(),
+            tracks: vec![AnnotatedTrack {
+                content_type: ContentType::Main,
+                content: content_track,
+                ..Default::default()
+            }],
             ..Default::default()
         }
     }
@@ -170,16 +202,16 @@ mod tests {
 
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0].agent.as_deref(), Some("汪"));
-        assert_eq!(lines[0].line_text.as_deref(), Some("摘一颗苹果"));
+        assert_eq!(get_text_from_main_track(&lines[0]), "摘一颗苹果");
 
         assert_eq!(lines[1].agent.as_deref(), Some("汪"), "应继承演唱者 '汪'");
-        assert_eq!(lines[1].line_text.as_deref(), Some("等你看我从门前过"));
+        assert_eq!(get_text_from_main_track(&lines[1]), "等你看我从门前过");
 
         assert_eq!(lines[2].agent.as_deref(), Some("BY2"));
-        assert_eq!(lines[2].line_text.as_deref(), Some("像夏天的可乐"));
+        assert_eq!(get_text_from_main_track(&lines[2]), "像夏天的可乐");
 
         assert_eq!(lines[3].agent.as_deref(), Some("BY2"), "应继承演唱者 'BY2'");
-        assert_eq!(lines[3].line_text.as_deref(), Some("像冬天的可可"));
+        assert_eq!(get_text_from_main_track(&lines[3]), "像冬天的可可");
     }
 
     #[test]
@@ -194,16 +226,15 @@ mod tests {
 
         recognize_agents(&mut lines);
 
-        // 纯标记行应该被移除
         assert_eq!(lines.len(), 3, "纯标记行应被移除，只留下3行歌词");
 
         assert_eq!(lines[0].agent.as_deref(), Some("TwoP"));
-        assert_eq!(lines[0].line_text.as_deref(), Some("都说爱情要慢慢来"));
+        assert_eq!(get_text_from_main_track(&lines[0]), "都说爱情要慢慢来");
 
         assert_eq!(lines[1].agent.as_deref(), Some("TwoP"));
 
         assert_eq!(lines[2].agent.as_deref(), Some("Stake"));
-        assert_eq!(lines[2].line_text.as_deref(), Some("怕你跟不上我的节奏"));
+        assert_eq!(get_text_from_main_track(&lines[2]), "怕你跟不上我的节奏");
     }
 
     #[test]
@@ -218,13 +249,7 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].agent.as_deref(), Some("BY2"));
 
-        // 检查音节是否被正确移除
-        let remaining_syllables: Vec<&str> = lines[0]
-            .main_syllables
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect();
-        assert_eq!(remaining_syllables, vec!["像", "夏天", "的", "可乐"]);
+        assert_eq!(get_text_from_main_track(&lines[0]), "像夏天的可乐");
 
         assert_eq!(
             lines[1].agent.as_deref(),
@@ -236,7 +261,7 @@ mod tests {
     #[test]
     fn test_recognize_agents_mixed_and_complex() {
         let mut lines = vec![
-            new_line("（合）：合唱歌词"), // 测试全角括号
+            new_line("（合）：合唱歌词"),
             new_line("第一句歌词"),
             new_syllable_line(vec!["TwoP", "："]),
             new_syllable_line(vec!["第", "二", "句", "逐", "字", "歌", "词"]),
@@ -249,21 +274,15 @@ mod tests {
         assert_eq!(lines.len(), 5);
 
         assert_eq!(lines[0].agent.as_deref(), Some("合"));
-        assert_eq!(lines[0].line_text.as_deref(), Some("合唱歌词"));
+        assert_eq!(get_text_from_main_track(&lines[0]), "合唱歌词");
 
         assert_eq!(lines[1].agent.as_deref(), Some("合"));
 
-        // "TwoP：" 这一行被移除
         assert_eq!(lines[2].agent.as_deref(), Some("TwoP"));
-        let syllables_2: Vec<&str> = lines[2]
-            .main_syllables
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect();
-        assert_eq!(syllables_2, vec!["第", "二", "句", "逐", "字", "歌", "词"]);
+        assert_eq!(get_text_from_main_track(&lines[2]), "第二句逐字歌词");
 
         assert_eq!(lines[3].agent.as_deref(), Some("Stake"));
-        assert_eq!(lines[3].line_text.as_deref(), Some("第三句行内歌词"));
+        assert_eq!(get_text_from_main_track(&lines[3]), "第三句行内歌词");
 
         assert_eq!(lines[4].agent.as_deref(), Some("Stake"));
     }
@@ -278,7 +297,9 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].agent.is_none());
         assert!(lines[1].agent.is_none());
-        // 确保内容没有被意外修改
-        assert_eq!(lines[0].line_text, original_lines[0].line_text);
+        assert_eq!(
+            get_text_from_main_track(&lines[0]),
+            get_text_from_main_track(&original_lines[0])
+        );
     }
 }

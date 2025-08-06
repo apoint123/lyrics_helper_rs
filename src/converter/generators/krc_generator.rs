@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::converter::{
     processors::metadata_processor::MetadataStore,
-    types::{ConvertError, LyricLine},
+    types::{ContentType, ConvertError, LyricLine},
 };
 
 /// KRC 生成的主入口函数。
@@ -18,21 +18,34 @@ pub fn generate_krc(
 
     for line in lines {
         // KRC 不支持背景人声
-        if line.main_syllables.is_empty() {
-            continue;
+        if let Some(main_track) = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Main)
+        {
+            let syllables: Vec<_> = main_track
+                .content
+                .words
+                .iter()
+                .flat_map(|w| &w.syllables)
+                .collect();
+
+            if syllables.is_empty() {
+                continue;
+            }
+
+            let line_duration = line.end_ms.saturating_sub(line.start_ms);
+            write!(krc_output, "[{},{}]", line.start_ms, line_duration)?;
+
+            for syl in syllables {
+                let offset_ms = syl.start_ms.saturating_sub(line.start_ms);
+                let duration_ms = syl.end_ms.saturating_sub(syl.start_ms);
+
+                write!(krc_output, "<{},{},0>{}", offset_ms, duration_ms, syl.text)?;
+            }
+
+            writeln!(krc_output)?;
         }
-
-        let line_duration = line.end_ms.saturating_sub(line.start_ms);
-        write!(krc_output, "[{},{}]", line.start_ms, line_duration)?;
-
-        for syl in &line.main_syllables {
-            let offset_ms = syl.start_ms.saturating_sub(line.start_ms);
-            let duration_ms = syl.end_ms.saturating_sub(syl.start_ms);
-
-            write!(krc_output, "<{},{},0>{}", offset_ms, duration_ms, syl.text)?;
-        }
-
-        writeln!(krc_output)?;
     }
 
     Ok(krc_output)

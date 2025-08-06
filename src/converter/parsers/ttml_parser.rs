@@ -15,8 +15,8 @@ use serde::Deserialize;
 use tracing::{error, warn};
 
 use crate::converter::types::{
-    BackgroundSection, ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData,
-    RomanizationEntry, TranslationEntry, TtmlParsingOptions, TtmlTimingMode,
+    AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable, LyricTrack,
+    ParsedSourceData, TrackMetadataKey, TtmlParsingOptions, TtmlTimingMode, Word,
 };
 
 // =================================================================================
@@ -96,15 +96,19 @@ struct TtmlParserState {
     body_state: BodyParseState,
 }
 
+#[derive(Debug, Default)]
+struct TimedAuxiliaryTracks {
+    translations: Vec<LyricTrack>,
+    romanizations: Vec<LyricTrack>,
+}
+
 /// 存储 `<metadata>` 区域解析状态的结构体。
 #[derive(Debug, Default)]
 struct MetadataParseState {
-    /// 存储从 `<iTunesMetadata>` 解析出的翻译，key 是 itunes:key。
+    /// 存储从 `<iTunesMetadata>` 解析出的逐行翻译，key 是 itunes:key。
     translation_map: HashMap<String, (String, Option<String>)>,
-    /// 存储从 `<translations>` 解析出的逐字翻译，key 是 itunes:key。
-    timed_translation_map: HashMap<String, Vec<crate::converter::types::TimedAuxiliaryLine>>,
-    /// 存储从 `<transliterations>` 解析出的逐字音译，key 是 itunes:key。
-    timed_romanization_map: HashMap<String, Vec<crate::converter::types::TimedAuxiliaryLine>>,
+    /// 存储从 `<translations>` 和 `<transliterations>` 解析出的逐字翻译或音译，key 是 itunes:key。
+    timed_track_map: HashMap<String, TimedAuxiliaryTracks>,
     /// 存储从 Agent ID 到 Agent Name 的映射。
     agent_id_to_name_map: HashMap<String, String>,
 }
@@ -135,26 +139,8 @@ struct CurrentPElementData {
     itunes_key: Option<String>,
     /// 用于在逐行模式下累积所有文本内容。
     line_text_accumulator: String,
-    /// 用于在逐字模式下累积所有音节。
-    syllables_accumulator: Vec<LyricSyllable>,
-    /// 用于累积当前行内的所有翻译。
-    translations_accumulator: Vec<TranslationEntry>,
-    /// 用于累积当前行内的所有罗马音。
-    romanizations_accumulator: Vec<RomanizationEntry>,
-    /// 用于累积当前行内的背景人声部分。
-    background_section_accumulator: Option<BackgroundSectionData>,
-    timed_translations_accumulator: Vec<crate::converter::types::TimedAuxiliaryLine>,
-    timed_romanizations_accumulator: Vec<crate::converter::types::TimedAuxiliaryLine>,
-}
-
-/// 存储当前处理的 `<span ttm:role="x-bg">` 临时数据。
-#[derive(Debug, Default, Clone)]
-struct BackgroundSectionData {
-    start_ms: u64,
-    end_ms: u64,
-    syllables: Vec<LyricSyllable>,
-    translations: Vec<TranslationEntry>,
-    romanizations: Vec<RomanizationEntry>,
+    /// 累积所有带注解的轨道数据
+    tracks_accumulator: Vec<AnnotatedTrack>,
 }
 
 /// 代表当前 `<span>` 的上下文信息，用于处理嵌套和内容分类。
@@ -534,6 +520,63 @@ fn handle_global_event<'a>(
     Ok(())
 }
 
+/// 处理 `</p>` 结束事件。
+/// 在此事件中，会回填来自 <iTunesMetadata> 的非定时翻译
+fn handle_p_end(
+    state: &mut TtmlParserState,
+    lines: &mut Vec<LyricLine>,
+    warnings: &mut Vec<String>,
+) {
+    if let Some(mut p_data) = state.body_state.current_p_element_data.take() {
+        if let Some(key) = &p_data.itunes_key {
+            // 回填非定时翻译
+            if let Some((text, lang)) = state.metadata_state.translation_map.get(key) {
+                // 将其附加到第一个主内容轨道上
+                if let Some(main_annotated_track) = p_data
+                    .tracks_accumulator
+                    .iter_mut()
+                    .find(|at| at.content_type == ContentType::Main)
+                {
+                    // 检查是否已存在具有相同文本的翻译轨道
+                    let translation_exists =
+                        main_annotated_track.translations.iter().any(|track| {
+                            track
+                                .words
+                                .first()
+                                .and_then(|w| w.syllables.first())
+                                .is_some_and(|s| s.text == *text)
+                        });
+
+                    if !translation_exists {
+                        let syllable = LyricSyllable {
+                            text: text.clone(),
+                            ..Default::default()
+                        };
+                        let word = Word {
+                            syllables: vec![syllable],
+                            ..Default::default()
+                        };
+                        let mut metadata = HashMap::new();
+                        if let Some(lang_code) = lang {
+                            metadata.insert(TrackMetadataKey::Language, lang_code.clone());
+                        }
+                        let translation_track = LyricTrack {
+                            words: vec![word],
+                            metadata,
+                        };
+                        main_annotated_track.translations.push(translation_track);
+                    }
+                }
+            }
+        }
+        finalize_p_element(p_data, lines, state, warnings);
+    }
+    // 重置 p 内部的状态
+    state.body_state.in_p = false;
+    state.body_state.span_stack.clear();
+    state.body_state.last_syllable_info = LastSyllableInfo::None;
+}
+
 /// 处理在 `<p>` 标签内部的事件。
 fn handle_p_event<'a>(
     event: &Event<'a>,
@@ -573,57 +616,30 @@ fn handle_p_event<'a>(
             }
         }
 
-        Event::End(e) => {
-            match e.local_name().as_ref() {
-                TAG_BR => {
-                    warnings.push(format!(
-                        "在 <p> ({}ms-{}ms) 中发现并忽略了一个 <br/> 标签。",
-                        state
-                            .body_state
-                            .current_p_element_data
-                            .as_ref()
-                            .map_or(0, |d| d.start_ms),
-                        state
-                            .body_state
-                            .current_p_element_data
-                            .as_ref()
-                            .map_or(0, |d| d.end_ms)
-                    ));
-                }
-                TAG_P => {
-                    // 当 </p> 出现时，意味着一行歌词的数据已经全部收集完毕。
-                    // 调用 finalize_p_element 来处理和整合这些数据。
-                    if let Some(mut p_data) = state.body_state.current_p_element_data.take() {
-                        // 回填来自 <iTunesMetadata> 的翻译
-                        if let Some(key) = &p_data.itunes_key
-                            && let Some((text, lang)) =
-                                state.metadata_state.translation_map.get(key)
-                        {
-                            // 避免重复添加
-                            if p_data
-                                .translations_accumulator
-                                .iter()
-                                .all(|t| &t.text != text)
-                            {
-                                p_data.translations_accumulator.push(TranslationEntry {
-                                    text: text.clone(),
-                                    lang: lang.clone(),
-                                });
-                            }
-                        }
-                        finalize_p_element(p_data, lines, state, warnings);
-                    }
-                    // 重置 p 内部的状态
-                    state.body_state.in_p = false;
-                    state.body_state.span_stack.clear();
-                    state.body_state.last_syllable_info = LastSyllableInfo::None;
-                }
-                TAG_SPAN => {
-                    process_span_end(state, warnings)?;
-                }
-                _ => {}
+        Event::End(e) => match e.local_name().as_ref() {
+            TAG_BR => {
+                warnings.push(format!(
+                    "在 <p> ({}ms-{}ms) 中发现并忽略了一个 <br/> 标签。",
+                    state
+                        .body_state
+                        .current_p_element_data
+                        .as_ref()
+                        .map_or(0, |d| d.start_ms),
+                    state
+                        .body_state
+                        .current_p_element_data
+                        .as_ref()
+                        .map_or(0, |d| d.end_ms)
+                ));
             }
-        }
+            TAG_P => {
+                handle_p_end(state, lines, warnings);
+            }
+            TAG_SPAN => {
+                process_span_end(state, warnings)?;
+            }
+            _ => {}
+        },
         _ => {}
     }
     Ok(())
@@ -718,14 +734,19 @@ fn process_span_start(
     // 如果是背景人声容器的开始，则初始化背景数据累加器
     if role == SpanRole::Background
         && let Some(p_data) = state.body_state.current_p_element_data.as_mut()
-        && p_data.background_section_accumulator.is_none()
+        && !p_data
+            .tracks_accumulator
+            .iter()
+            .any(|t| t.content_type == ContentType::Background)
     {
-        p_data.background_section_accumulator = Some(BackgroundSectionData {
-            start_ms: start_ms.unwrap_or(0),
-            end_ms: end_ms.unwrap_or(0),
-            ..Default::default()
+        p_data.tracks_accumulator.push(AnnotatedTrack {
+            content_type: ContentType::Background,
+            content: Default::default(),
+            translations: vec![],
+            romanizations: vec![],
         });
     }
+
     Ok(())
 }
 
@@ -748,18 +769,18 @@ fn process_text_event(e_text: &BytesText, state: &mut TtmlParserState) -> Result
             || (!text_slice.contains('\n') && !text_slice.contains('\r'));
 
         if has_space && let Some(p_data) = state.body_state.current_p_element_data.as_mut() {
-            // 根据上一个音节是否是背景人声，找到正确的音节列表
-            let target_syllables = if was_background {
-                p_data
-                    .background_section_accumulator
-                    .as_mut()
-                    .map(|bs| &mut bs.syllables)
+            let target_content_type = if was_background {
+                ContentType::Background
             } else {
-                Some(&mut p_data.syllables_accumulator)
+                ContentType::Main
             };
 
-            // 更新最后一个音节的 `ends_with_space` 标志
-            if let Some(last_syl) = target_syllables.and_then(|s| s.last_mut())
+            if let Some(last_syl) = p_data
+                .tracks_accumulator
+                .iter_mut()
+                .find(|t| t.content_type == target_content_type)
+                .and_then(|at| at.content.words.last_mut())
+                .and_then(|w| w.syllables.last_mut())
                 && !last_syl.ends_with_space
             {
                 last_syl.ends_with_space = true;
@@ -856,29 +877,45 @@ fn handle_generic_span_end(
             .iter()
             .any(|s| s.role == SpanRole::Background);
 
-        let target_syllables: Option<&mut Vec<LyricSyllable>> = if was_within_bg {
-            p_data
-                .background_section_accumulator
-                .as_mut()
-                .map(|bs| &mut bs.syllables)
+        let target_content_type = if was_within_bg {
+            ContentType::Background
         } else {
-            Some(&mut p_data.syllables_accumulator)
+            ContentType::Main
         };
 
-        let Some(target_syllables) = target_syllables else {
-            return Ok(());
+        let annotated_track_idx = match p_data
+            .tracks_accumulator
+            .iter()
+            .position(|t| t.content_type == target_content_type)
+        {
+            Some(index) => index,
+            None => {
+                p_data.tracks_accumulator.push(AnnotatedTrack {
+                    content_type: target_content_type,
+                    content: Default::default(),
+                    translations: vec![],
+                    romanizations: vec![],
+                });
+                p_data.tracks_accumulator.len() - 1
+            }
         };
+
+        let target_content_track = &mut p_data.tracks_accumulator[annotated_track_idx].content;
+
+        if target_content_track.words.is_empty() {
+            target_content_track.words.push(Word::default());
+        }
+        let target_word = target_content_track.words.first_mut().unwrap();
 
         if text.starts_with(char::is_whitespace)
             && !text.trim().is_empty()
-            && let Some(last_syl) = target_syllables.last_mut()
+            && let Some(last_syl) = target_word.syllables.last_mut()
             && !last_syl.ends_with_space
         {
             last_syl.ends_with_space = true;
         }
 
         let trimmed_text = text.trim();
-
         let syllable_to_add = if !trimmed_text.is_empty() {
             state.text_processing_buffer.clear();
             if was_within_bg {
@@ -908,7 +945,7 @@ fn handle_generic_span_end(
         };
 
         if let Some(syllable) = syllable_to_add {
-            target_syllables.push(syllable);
+            target_word.syllables.push(syllable);
             state.body_state.last_syllable_info = LastSyllableInfo::EndedSyllable {
                 was_background: was_within_bg,
             };
@@ -954,51 +991,44 @@ fn handle_auxiliary_span_end(
             ConvertError::Internal("在处理辅助 span 时丢失了 p_data 上下文".to_string())
         })?;
 
-    // 检查是否在背景人声容器内
-    let was_within_bg = state
-        .body_state
-        .span_stack
-        .iter()
-        .any(|s| s.role == SpanRole::Background);
+    if let Some(last_content_track) = p_data.tracks_accumulator.last_mut() {
+        let syllable = LyricSyllable {
+            text: state.text_processing_buffer.clone(),
+            ..Default::default()
+        };
+        let word = Word {
+            syllables: vec![syllable],
+            ..Default::default()
+        };
+        let mut metadata = HashMap::new();
 
-    // 确定语言，优先使用 span 自身的 xml:lang，否则使用全局默认值
-    let lang_to_use = ctx.lang.clone().or_else(|| match ctx.role {
-        SpanRole::Translation => state.default_translation_lang.clone(),
-        SpanRole::Romanization => state.default_romanization_lang.clone(),
-        _ => None,
-    });
+        let mut aux_track = LyricTrack {
+            words: vec![word],
+            metadata: Default::default(),
+        };
 
-    match ctx.role {
-        SpanRole::Translation => {
-            let entry = TranslationEntry {
-                text: state.text_processing_buffer.clone(),
-                lang: lang_to_use,
-            };
-            // 添加到正确的累加器
-            if was_within_bg {
-                if let Some(bg_section) = p_data.background_section_accumulator.as_mut() {
-                    bg_section.translations.push(entry);
+        match ctx.role {
+            SpanRole::Translation => {
+                if let Some(lang) = ctx.lang.clone().or(state.default_translation_lang.clone()) {
+                    metadata.insert(TrackMetadataKey::Language, lang);
                 }
-            } else {
-                p_data.translations_accumulator.push(entry);
+                aux_track.metadata = metadata;
+                last_content_track.translations.push(aux_track);
             }
-        }
-        SpanRole::Romanization => {
-            let entry = RomanizationEntry {
-                text: state.text_processing_buffer.clone(),
-                lang: lang_to_use,
-                scheme: ctx.scheme.clone(),
-            };
-            if was_within_bg {
-                if let Some(bg_section) = p_data.background_section_accumulator.as_mut() {
-                    bg_section.romanizations.push(entry);
+            SpanRole::Romanization => {
+                if let Some(lang) = ctx.lang.clone().or(state.default_romanization_lang.clone()) {
+                    metadata.insert(TrackMetadataKey::Language, lang);
                 }
-            } else {
-                p_data.romanizations_accumulator.push(entry);
+                if let Some(scheme) = ctx.scheme.clone() {
+                    metadata.insert(TrackMetadataKey::Scheme, scheme);
+                }
+                aux_track.metadata = metadata;
+                last_content_track.romanizations.push(aux_track);
             }
+            _ => {} // 不应该发生
         }
-        _ => {} // 不应该发生
     }
+
     Ok(())
 }
 
@@ -1017,26 +1047,6 @@ fn handle_background_span_end(
             ConvertError::Internal("在处理背景 span 时丢失了 p_data 上下文".to_string())
         })?;
 
-    // 如果背景容器本身没有时间戳，但内部有带时间戳的音节，
-    // 则根据内部音节的时间范围来推断容器的时间范围。
-    if let Some(bg_acc) = p_data.background_section_accumulator.as_mut()
-        && (ctx.start_ms.is_none() || ctx.end_ms.is_none())
-        && !bg_acc.syllables.is_empty()
-    {
-        bg_acc.start_ms = bg_acc
-            .syllables
-            .iter()
-            .map(|s| s.start_ms)
-            .min()
-            .unwrap_or(bg_acc.start_ms);
-        bg_acc.end_ms = bg_acc
-            .syllables
-            .iter()
-            .map(|s| s.end_ms)
-            .max()
-            .unwrap_or(bg_acc.end_ms);
-    }
-
     // 处理不规范的情况：背景容器直接包含文本，而不是通过嵌套的 span。
     let trimmed_text = text.trim();
     if !trimmed_text.is_empty() {
@@ -1045,17 +1055,39 @@ fn handle_background_span_end(
             trimmed_text.escape_debug()
         );
         if let (Some(start_ms), Some(end_ms)) = (ctx.start_ms, ctx.end_ms) {
-            if let Some(bg_acc) = p_data.background_section_accumulator.as_mut() {
+            if let Some(bg_annotated_track) = p_data
+                .tracks_accumulator
+                .iter_mut()
+                .find(|t| t.content_type == ContentType::Background)
+            {
+                let bg_content_track = &mut bg_annotated_track.content;
                 // 只有在背景容器内部没有其他音节时，才将此直接文本视为一个音节
-                if bg_acc.syllables.is_empty() {
+                if bg_content_track.words.is_empty()
+                    || bg_content_track
+                        .words
+                        .iter()
+                        .all(|w| w.syllables.is_empty())
+                {
                     normalize_text_whitespace_into(trimmed_text, &mut state.text_processing_buffer);
-                    bg_acc.syllables.push(LyricSyllable {
+
+                    let syllable = LyricSyllable {
                         text: state.text_processing_buffer.clone(),
                         start_ms,
                         end_ms: end_ms.max(start_ms),
                         duration_ms: Some(end_ms.saturating_sub(start_ms)),
                         ends_with_space: !text.is_empty() && text.ends_with(char::is_whitespace),
-                    });
+                    };
+
+                    if bg_content_track.words.is_empty() {
+                        bg_content_track.words.push(Word::default());
+                    }
+                    bg_content_track
+                        .words
+                        .first_mut()
+                        .unwrap()
+                        .syllables
+                        .push(syllable);
+
                     state.body_state.last_syllable_info = LastSyllableInfo::EndedSyllable {
                         was_background: true,
                     };
@@ -1084,275 +1116,172 @@ fn finalize_p_element(
     mut p_data: CurrentPElementData,
     lines: &mut Vec<LyricLine>,
     state: &mut TtmlParserState,
-    warnings: &mut Vec<String>,
+    _warnings: &mut Vec<String>,
 ) {
     if let Some(key) = &p_data.itunes_key {
-        // 回填逐行翻译
-        if let Some((text, lang)) = state.metadata_state.translation_map.get(key)
-            && p_data
-                .translations_accumulator
+        if let Some(timed_tracks) = state.metadata_state.timed_track_map.get(key) {
+            if let Some(main_annotated_track) = p_data
+                .tracks_accumulator
+                .iter_mut()
+                .find(|at| at.content_type == ContentType::Main)
+            {
+                main_annotated_track
+                    .translations
+                    .extend(timed_tracks.translations.clone());
+                main_annotated_track
+                    .romanizations
+                    .extend(timed_tracks.romanizations.clone());
+            }
+        }
+    }
+
+    if state.is_line_timing_mode {
+        for annotated_track in &mut p_data.tracks_accumulator {
+            let content_track = &mut annotated_track.content;
+            let line_text_content = content_track
+                .words
                 .iter()
-                .all(|t| &t.text != text)
+                .flat_map(|w| w.syllables.iter())
+                .map(|s| {
+                    if s.ends_with_space {
+                        format!("{} ", s.text)
+                    } else {
+                        s.text.clone()
+                    }
+                })
+                .collect::<String>();
+
+            normalize_text_whitespace_into(&line_text_content, &mut state.text_processing_buffer);
+
+            content_track.words = vec![Word {
+                syllables: vec![LyricSyllable {
+                    text: state.text_processing_buffer.clone(),
+                    start_ms: p_data.start_ms,
+                    end_ms: p_data.end_ms,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }];
+
+            annotated_track.translations.clear();
+            annotated_track.romanizations.clear();
+        }
+    } else if !p_data.line_text_accumulator.trim().is_empty() {
+        if let Some(main_annotated_track) = p_data
+            .tracks_accumulator
+            .iter_mut()
+            .find(|at| at.content_type == ContentType::Main)
         {
-            p_data.translations_accumulator.push(TranslationEntry {
-                text: text.clone(),
-                lang: lang.clone(),
-            });
-        }
-
-        // 回填逐字翻译
-        if let Some(timed_lines) = state.metadata_state.timed_translation_map.remove(key) {
-            p_data.timed_translations_accumulator.extend(timed_lines);
-        }
-
-        // 回填逐字音译
-        if let Some(timed_lines) = state.metadata_state.timed_romanization_map.remove(key) {
-            p_data.timed_romanizations_accumulator.extend(timed_lines);
-        }
-    }
-
-    for timed_trans in &p_data.timed_translations_accumulator {
-        if !timed_trans.syllables.is_empty() {
-            let line_text = timed_trans
-                .syllables
-                .iter()
-                .map(|s| s.text.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            if !line_text.is_empty() {
-                p_data.translations_accumulator.push(TranslationEntry {
-                    text: line_text,
-                    lang: timed_trans.lang.clone(),
-                });
+            if main_annotated_track.content.words.is_empty() {
+                // 如果主轨道为空，但我们有未被span包裹的文本，则将此文本视为一个覆盖整个P标签时长的音节
+                normalize_text_whitespace_into(
+                    &p_data.line_text_accumulator,
+                    &mut state.text_processing_buffer,
+                );
+                if !state.text_processing_buffer.is_empty() {
+                    let syllable = LyricSyllable {
+                        text: state.text_processing_buffer.clone(),
+                        start_ms: p_data.start_ms,
+                        end_ms: p_data.end_ms,
+                        duration_ms: Some(p_data.end_ms.saturating_sub(p_data.start_ms)),
+                        ends_with_space: false,
+                    };
+                    main_annotated_track.content.words = vec![Word {
+                        syllables: vec![syllable],
+                        ..Default::default()
+                    }];
+                }
             }
         }
     }
 
-    for timed_roman in &p_data.timed_romanizations_accumulator {
-        if !timed_roman.syllables.is_empty() {
-            let line_text = timed_roman
-                .syllables
-                .iter()
-                .map(|s| s.text.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            if !line_text.is_empty() {
-                p_data.romanizations_accumulator.push(RomanizationEntry {
-                    text: line_text,
-                    lang: timed_roman.lang.clone(),
-                    scheme: None,
-                });
-            }
-        }
-    }
-
-    let CurrentPElementData {
-        start_ms,
-        end_ms,
-        agent,
-        song_part,
-        line_text_accumulator,
-        syllables_accumulator,
-        translations_accumulator,
-        romanizations_accumulator,
-        background_section_accumulator,
-        itunes_key,
-        timed_translations_accumulator,
-        timed_romanizations_accumulator,
-    } = p_data;
-
-    let final_agent_name =
-        agent.and_then(|id| state.metadata_state.agent_id_to_name_map.get(&id).cloned());
-
-    // 创建一个初步的 LyricLine
-    let mut final_line = LyricLine {
-        start_ms,
-        end_ms,
-        itunes_key,
-        agent: final_agent_name,
-        song_part,
-        translations: translations_accumulator,
-        romanizations: romanizations_accumulator,
-        timed_translations: timed_translations_accumulator,
-        timed_romanizations: timed_romanizations_accumulator,
-        ..Default::default()
+    let mut new_line = LyricLine {
+        start_ms: p_data.start_ms,
+        end_ms: p_data.end_ms,
+        agent: p_data.agent,
+        song_part: p_data.song_part,
+        tracks: p_data.tracks_accumulator,
     };
 
-    // 根据计时模式，调用不同的处理逻辑
-    if state.is_line_timing_mode {
-        finalize_p_for_line_mode(
-            &mut final_line,
-            &line_text_accumulator,
-            &syllables_accumulator,
-            warnings,
-            &mut state.text_processing_buffer,
-        );
-    } else {
-        finalize_p_for_word_mode(
-            &mut final_line,
-            syllables_accumulator,
-            &line_text_accumulator,
-            warnings,
-            &mut state.text_processing_buffer,
-        );
-    }
+    // 重新计算行的结束时间，应为所有轨道中所有音节的最大结束时间
+    let max_track_end_ms = new_line
+        .tracks
+        .iter()
+        .flat_map(|at| {
+            let content_syllables = at.content.words.iter().flat_map(|w| &w.syllables);
+            let translation_syllables = at
+                .translations
+                .iter()
+                .flat_map(|t| t.words.iter().flat_map(|w| &w.syllables));
+            let romanization_syllables = at
+                .romanizations
+                .iter()
+                .flat_map(|t| t.words.iter().flat_map(|w| &w.syllables));
+            content_syllables
+                .chain(translation_syllables)
+                .chain(romanization_syllables)
+        })
+        .map(|syllable| syllable.end_ms)
+        .max()
+        .unwrap_or(0);
 
-    // 处理累积的背景人声部分
-    if let Some(bg_data) = background_section_accumulator
-        && (!bg_data.syllables.is_empty()
-            || !bg_data.translations.is_empty()
-            || !bg_data.romanizations.is_empty())
-    {
-        final_line.background_section = Some(BackgroundSection {
-            start_ms: bg_data.start_ms,
-            end_ms: bg_data.end_ms,
-            syllables: bg_data.syllables,
-            translations: bg_data.translations,
-            romanizations: bg_data.romanizations,
+    new_line.end_ms = new_line.end_ms.max(max_track_end_ms);
+
+    // 如果没有任何轨道，并且有逐行文本，创建一个主轨道
+    if new_line.tracks.is_empty() && !p_data.line_text_accumulator.trim().is_empty() {
+        normalize_text_whitespace_into(
+            p_data.line_text_accumulator.trim(),
+            &mut state.text_processing_buffer,
+        );
+        let syllable = LyricSyllable {
+            text: state.text_processing_buffer.clone(),
+            start_ms: new_line.start_ms,
+            end_ms: new_line.end_ms,
+            ..Default::default()
+        };
+        let word = Word {
+            syllables: vec![syllable],
+            ..Default::default()
+        };
+        let main_content_track = LyricTrack {
+            words: vec![word],
+            ..Default::default()
+        };
+        new_line.tracks.push(AnnotatedTrack {
+            content_type: ContentType::Main,
+            content: main_content_track,
+            translations: vec![],
+            romanizations: vec![],
         });
     }
 
-    if let Some(last_syl) = final_line.main_syllables.last_mut() {
-        last_syl.ends_with_space = false;
-    }
-    if let Some(bg_section) = final_line.background_section.as_mut()
-        && let Some(last_bg_syl) = bg_section.syllables.last_mut()
-    {
-        last_bg_syl.ends_with_space = false;
-    }
-
-    // 如果行有文本但没有音节，创建一个代表整行的音节
-    if final_line.main_syllables.is_empty()
-        && let Some(line_text) = final_line.line_text.as_ref().filter(|s| !s.is_empty())
-        && final_line.end_ms > final_line.start_ms
-    {
-        final_line.main_syllables.push(LyricSyllable {
-            text: line_text.clone(),
-            start_ms: final_line.start_ms,
-            end_ms: final_line.end_ms,
-            duration_ms: Some(final_line.end_ms.saturating_sub(final_line.start_ms)),
-            ends_with_space: false,
-        });
-    }
-
-    if final_line.main_syllables.is_empty()
-        && final_line.line_text.as_deref().is_none_or(str::is_empty)
-        && final_line.translations.is_empty()
-        && final_line.romanizations.is_empty()
-        && final_line.background_section.is_none()
-        && final_line.timed_translations.is_empty()
-        && final_line.timed_romanizations.is_empty()
-        && final_line.end_ms <= final_line.start_ms
-    {
-        return;
-    }
-
-    lines.push(final_line);
-}
-
-/// 处理逐行模式下 `<p>` 元素结束的逻辑。
-fn finalize_p_for_line_mode(
-    final_line: &mut LyricLine,
-    line_text_accumulator: &str,
-    syllables_accumulator: &[LyricSyllable],
-    warnings: &mut Vec<String>,
-    text_processing_buffer: &mut String,
-) {
-    let line_text_content: String;
-
-    if !syllables_accumulator.is_empty() {
-        line_text_content = syllables_accumulator
-            .iter()
-            .map(|s| {
-                if s.ends_with_space {
-                    format!("{} ", s.text)
-                } else {
-                    s.text.clone()
-                }
-            })
-            .collect::<String>();
-
-        if !line_text_accumulator.trim().is_empty() {
-            warnings.push(format!(
-                "在逐行模式的段落 ({}ms-{}ms) 中，忽略了未被 span 包裹的文本：'{}'",
-                final_line.start_ms,
-                final_line.end_ms,
-                line_text_accumulator.trim()
-            ));
-        }
-    } else {
-        // 如果没有音节（例如 <p>hello world</p>），则回退使用累积的行文本。
-        line_text_content = line_text_accumulator.to_string();
-    }
-
-    normalize_text_whitespace_into(&line_text_content, text_processing_buffer);
-    final_line.line_text = Some(text_processing_buffer.clone());
-
-    // 在逐行模式下，音节的时间戳被忽略，记录一个警告。
-    if !syllables_accumulator.is_empty() {
-        warnings.push(format!(
-            "在逐行歌词的段落 ({}ms-{}ms) 中检测到并忽略了 {} 个逐字音节的时间戳。",
-            final_line.start_ms,
-            final_line.end_ms,
-            syllables_accumulator.len()
-        ));
-    }
-}
-
-/// 处理逐字模式下 `<p>` 元素结束的逻辑。
-fn finalize_p_for_word_mode(
-    final_line: &mut LyricLine,
-    syllables_accumulator: Vec<LyricSyllable>,
-    line_text_accumulator: &str,
-    warnings: &mut Vec<String>,
-    text_processing_buffer: &mut String,
-) {
-    final_line.main_syllables = syllables_accumulator;
-
-    // 处理那些在 `<p>` 标签内但没有被 `<span>` 包裹的文本。
-    normalize_text_whitespace_into(line_text_accumulator, text_processing_buffer);
-    if !text_processing_buffer.is_empty() {
-        if final_line.main_syllables.is_empty() {
-            // 如果行内没有任何音节，则将这些文本视为一个覆盖整行时间的音节。
-            let syl_start = final_line.start_ms;
-            let syl_end = final_line.end_ms;
-            if syl_start > syl_end {
-                warnings.push(format!("为 <p> 标签内的直接文本 '{}' 创建音节时，时间戳无效 (start_ms {} > end_ms {}).", text_processing_buffer.escape_debug(), syl_start, syl_end));
-            }
-            final_line.main_syllables.push(LyricSyllable {
-                text: text_processing_buffer.clone(),
-                start_ms: syl_start,
-                end_ms: syl_end.max(syl_start),
-                duration_ms: Some(syl_end.saturating_sub(syl_start)),
-                ends_with_space: false,
-            });
-        } else {
-            // 如果行内已有音节，这些未被包裹的文本通常是无意义的，记录警告并忽略。
-            warnings.push(format!(
-                "段落 ({}ms-{}ms) 包含未被span包裹的文本: '{}'。此文本被忽略。",
-                final_line.start_ms,
-                final_line.end_ms,
-                text_processing_buffer.escape_debug()
-            ));
+    if let Some(itunes_key) = p_data.itunes_key {
+        if let Some(main_track) = new_line
+            .tracks
+            .iter_mut()
+            .find(|t| t.content_type == ContentType::Main)
+        {
+            main_track.content.metadata.insert(
+                TrackMetadataKey::Custom("itunes_key".to_string()),
+                itunes_key,
+            );
         }
     }
 
-    // 根据音节列表，重新组装整行的文本 `line_text`。
-    if final_line.line_text.is_none() && !final_line.main_syllables.is_empty() {
-        let assembled_line_text = final_line
-            .main_syllables
-            .iter()
-            .map(|s| {
-                if s.ends_with_space {
-                    format!("{} ", s.text)
-                } else {
-                    s.text.clone()
-                }
-            })
-            .collect::<String>();
-        final_line.line_text = Some(assembled_line_text.trim_end().to_string());
+    let is_empty = new_line.tracks.iter().all(|at| {
+        at.content.words.iter().all(|w| w.syllables.is_empty())
+            && at
+                .translations
+                .iter()
+                .all(|t| t.words.iter().all(|w| w.syllables.is_empty()))
+            && at
+                .romanizations
+                .iter()
+                .all(|t| t.words.iter().all(|w| w.syllables.is_empty()))
+    });
+
+    if !is_empty {
+        lines.push(new_line);
     }
 }
 
@@ -1551,16 +1480,24 @@ fn process_deserialized_metadata(
                     .collect();
 
                 if !syllables.is_empty() {
-                    let timed_line = crate::converter::types::TimedAuxiliaryLine {
-                        lang: block.lang.clone(),
-                        syllables,
+                    let mut track_metadata = HashMap::new();
+                    if let Some(lang) = block.lang.clone() {
+                        track_metadata.insert(TrackMetadataKey::Language, lang);
+                    }
+                    let track = LyricTrack {
+                        words: vec![Word {
+                            syllables,
+                            ..Default::default()
+                        }],
+                        metadata: track_metadata,
                     };
                     state
                         .metadata_state
-                        .timed_translation_map
+                        .timed_track_map
                         .entry(line_content.key)
                         .or_default()
-                        .push(timed_line);
+                        .translations
+                        .push(track);
                 }
             }
         }
@@ -1574,16 +1511,24 @@ fn process_deserialized_metadata(
                     .collect();
 
                 if !syllables.is_empty() {
-                    let timed_line = crate::converter::types::TimedAuxiliaryLine {
-                        lang: block.lang.clone(),
-                        syllables,
+                    let mut track_metadata = HashMap::new();
+                    if let Some(lang) = block.lang.clone() {
+                        track_metadata.insert(TrackMetadataKey::Language, lang);
+                    }
+                    let track = LyricTrack {
+                        words: vec![Word {
+                            syllables,
+                            ..Default::default()
+                        }],
+                        metadata: track_metadata,
                     };
                     state
                         .metadata_state
-                        .timed_romanization_map
+                        .timed_track_map
                         .entry(line_content.key)
                         .or_default()
-                        .push(timed_line);
+                        .romanizations
+                        .push(track);
                 }
             }
         }

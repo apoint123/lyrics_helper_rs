@@ -106,6 +106,11 @@ impl From<ConvertError> for LyricsHelperError {
 
             ConvertError::Format(e) => Self::Internal(e.to_string()),
             ConvertError::Internal(s) => Self::Internal(s),
+            ConvertError::WordBoundaryDetection(s) => {
+                Self::Parser(format!("词组边界检测失败: {s}"))
+            }
+            ConvertError::FuriganaParsingError(s) => Self::Parser(format!("振假名解析失败: {s}")),
+            ConvertError::TrackMergeError(s) => Self::Internal(format!("轨道合并失败: {s}")),
         }
     }
 }

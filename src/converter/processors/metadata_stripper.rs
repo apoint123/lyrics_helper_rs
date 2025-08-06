@@ -9,7 +9,10 @@ use std::{
 use regex::{Regex, RegexBuilder};
 use tracing::{debug, trace, warn};
 
-use crate::converter::types::{LyricLine, MetadataStripperOptions};
+use crate::converter::{
+    LyricLine,
+    types::{ContentType, MetadataStripperOptions},
+};
 
 type RegexCacheKey = (String, bool); // (pattern, case_sensitive)
 type RegexCacheMap = BTreeMap<RegexCacheKey, Regex>;
@@ -45,18 +48,22 @@ fn get_cached_regex(pattern: &str, case_sensitive: bool) -> Option<Regex> {
 }
 
 /// 辅助函数：从 LyricLine 获取用于匹配的纯文本内容。
-fn get_plain_text_from_lyric_line(line: &LyricLine) -> String {
-    if let Some(text) = &line.line_text
-        && !text.is_empty()
+fn get_plain_text_from_new_lyric_line(line: &LyricLine) -> String {
+    if let Some(main_track) = line
+        .tracks
+        .iter()
+        .find(|t| t.content_type == ContentType::Main)
     {
+        let text = main_track
+            .content
+            .words
+            .iter()
+            .flat_map(|word| &word.syllables)
+            .map(|syllable| syllable.text.as_str())
+            .collect::<String>();
         return text.trim().to_string();
     }
-    line.main_syllables
-        .iter()
-        .map(|syllable| syllable.text.as_str())
-        .collect::<String>()
-        .trim()
-        .to_string()
+    String::new()
 }
 
 /// 从 `LyricLine` 列表中移除元数据行。
@@ -387,7 +394,7 @@ pub fn strip_descriptive_metadata_lines(
         let mut last_matching_header_index: Option<usize> = None;
         let header_scan_limit = 20.min(lines.len());
         for (i, line_item) in lines.iter().enumerate().take(header_scan_limit) {
-            let line_text = get_plain_text_from_lyric_line(line_item);
+            let line_text = get_plain_text_from_new_lyric_line(line_item);
             if line_matches_keyword_rule(&line_text) {
                 last_matching_header_index = Some(i);
             }
@@ -403,7 +410,7 @@ pub fn strip_descriptive_metadata_lines(
                 .saturating_sub(end_lookback_count)
                 .max(first_lyric_line_index);
             for i in (footer_scan_start_index..lines.len()).rev() {
-                let line_text = get_plain_text_from_lyric_line(&lines[i]);
+                let line_text = get_plain_text_from_new_lyric_line(&lines[i]);
                 if line_matches_keyword_rule(&line_text) {
                     last_lyric_line_exclusive_index = i;
                 } else {
@@ -443,7 +450,7 @@ pub fn strip_descriptive_metadata_lines(
         if !compiled_regexes.is_empty() {
             let before_count = lines.len();
             lines.retain(|line| {
-                let line_text = get_plain_text_from_lyric_line(line);
+                let line_text = get_plain_text_from_new_lyric_line(line);
                 !compiled_regexes
                     .iter()
                     .any(|regex| regex.is_match(&line_text))

@@ -5,8 +5,8 @@ use std::fmt::Write as FmtWrite;
 use crate::converter::{
     processors::metadata_processor::MetadataStore,
     types::{
-        BackgroundSection, ConvertError, LrcEndTimeOutputMode, LrcGenerationOptions,
-        LrcSubLinesOutputMode, LyricLine,
+        ContentType, ConvertError, LrcEndTimeOutputMode, LrcGenerationOptions,
+        LrcSubLinesOutputMode, LyricLine, LyricTrack,
     },
 };
 
@@ -24,17 +24,43 @@ pub fn generate_lrc(
     }
 
     for (i, line) in lines.iter().enumerate() {
+        let main_annotated_track = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Main);
+        let bg_annotated_track = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Background);
+
         match options.sub_lines_output_mode {
             LrcSubLinesOutputMode::Ignore => {
-                write_main_line(&mut lrc_output, line)?;
+                if let Some(track) = main_annotated_track {
+                    write_track_as_line(&mut lrc_output, line.start_ms, &track.content)?;
+                }
             }
             LrcSubLinesOutputMode::MergeWithParentheses => {
-                write_merged_line(&mut lrc_output, line)?;
+                write_merged_line(
+                    &mut lrc_output,
+                    line.start_ms,
+                    main_annotated_track.map(|t| &t.content),
+                    bg_annotated_track.map(|t| &t.content),
+                )?;
             }
             LrcSubLinesOutputMode::SeparateLines => {
-                write_main_line(&mut lrc_output, line)?;
-                if let Some(sub_line) = &line.background_section {
-                    write_sub_line(&mut lrc_output, sub_line)?;
+                if let Some(track) = main_annotated_track {
+                    write_track_as_line(&mut lrc_output, line.start_ms, &track.content)?;
+                }
+                if let Some(track) = bg_annotated_track {
+                    let bg_start_ms = track
+                        .content
+                        .words
+                        .iter()
+                        .flat_map(|w| &w.syllables)
+                        .map(|s| s.start_ms)
+                        .min()
+                        .unwrap_or(line.start_ms);
+                    write_track_as_line(&mut lrc_output, bg_start_ms, &track.content)?;
                 }
             }
         }
@@ -52,72 +78,71 @@ pub fn generate_lrc(
     Ok(format!("{trimmed_output}\n"))
 }
 
-/// 获取一行的文本，优先使用 line_text，否则拼接 syllables。
-fn get_line_text(line: &LyricLine) -> Option<String> {
-    line.line_text.clone().or_else(|| {
-        if !line.main_syllables.is_empty() {
-            Some(
-                line.main_syllables
-                    .iter()
-                    .map(|s| s.text.as_str())
-                    .collect::<String>(),
-            )
-        } else {
-            None
-        }
-    })
+/// 从轨道中提取纯文本。
+fn get_text_from_track(track: &LyricTrack) -> String {
+    let line_text = track
+        .words
+        .iter()
+        .flat_map(|w| &w.syllables)
+        .map(|syl| {
+            if syl.ends_with_space {
+                format!("{} ", syl.text)
+            } else {
+                syl.text.clone()
+            }
+        })
+        .collect::<String>();
+
+    // .collect() 可能会在最后留下一个多余的空格，最好 trim 一下
+    line_text.trim_end().to_string()
 }
 
-/// 写入一个简单的、带时间戳的 LRC 行。
-fn write_simple_lrc_line(
+/// 将一个轨道作为简单的 LRC 行写入。
+fn write_track_as_line(
     output: &mut String,
     start_ms: u64,
-    text: &str,
+    track: &LyricTrack,
 ) -> Result<(), std::fmt::Error> {
+    let text = get_text_from_track(track);
     if !text.trim().is_empty() {
         writeln!(output, "{}{}", format_lrc_time_ms(start_ms), text)?;
     }
     Ok(())
 }
 
-/// 将主歌词作为独立的 LRC 行写入。
-fn write_main_line(output: &mut String, line: &LyricLine) -> Result<(), std::fmt::Error> {
-    if let Some(text) = get_line_text(line) {
-        write_simple_lrc_line(output, line.start_ms, &text)?;
-    }
-    Ok(())
-}
-
-/// 将背景人声部分作为独立的 LRC 行写入。
-fn write_sub_line(
+/// 将主轨道和背景轨道合并为一行写入。
+fn write_merged_line(
     output: &mut String,
-    sub_line: &BackgroundSection,
+    line_start_ms: u64,
+    main_track: Option<&LyricTrack>,
+    bg_track: Option<&LyricTrack>,
 ) -> Result<(), std::fmt::Error> {
-    let text: String = sub_line.syllables.iter().map(|s| s.text.as_str()).collect();
-    write_simple_lrc_line(output, sub_line.start_ms, &text)?;
-    Ok(())
-}
+    let main_text = main_track.map(get_text_from_track);
+    let bg_text = bg_track.map(get_text_from_track);
 
-/// 将主歌词和背景人声合并为一行写入。
-fn write_merged_line(output: &mut String, line: &LyricLine) -> Result<(), std::fmt::Error> {
-    let main_text = get_line_text(line);
-
-    if let Some(sub_section) = &line.background_section {
-        let sub_text: String = sub_section
-            .syllables
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect();
-
-        let merged_text = match main_text {
-            Some(mt) if !mt.trim().is_empty() => format!("{} ({})", mt.trim(), sub_text.trim()),
-            _ => format!("({})", sub_text.trim()),
-        };
-
-        let merged_start_ms = line.start_ms.min(sub_section.start_ms);
-        write_simple_lrc_line(output, merged_start_ms, &merged_text)?;
-    } else if let Some(text) = main_text {
-        write_simple_lrc_line(output, line.start_ms, &text)?;
+    match (main_text, bg_text) {
+        (Some(mt), Some(bt)) if !mt.trim().is_empty() && !bt.trim().is_empty() => {
+            let merged_text = format!("{} ({})", mt.trim(), bt.trim());
+            writeln!(
+                output,
+                "{}{}",
+                format_lrc_time_ms(line_start_ms),
+                merged_text
+            )?;
+        }
+        (Some(mt), _) if !mt.trim().is_empty() => {
+            writeln!(output, "{}{}", format_lrc_time_ms(line_start_ms), mt)?;
+        }
+        (_, Some(bt)) if !bt.trim().is_empty() => {
+            let merged_text = format!("({})", bt.trim());
+            writeln!(
+                output,
+                "{}{}",
+                format_lrc_time_ms(line_start_ms),
+                merged_text
+            )?;
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -129,31 +154,22 @@ fn handle_end_time_output(
     mode: LrcEndTimeOutputMode,
     next_line_start_ms: Option<u64>,
 ) -> Result<(), std::fmt::Error> {
-    let current_end_ms = current_line
-        .background_section
-        .as_ref()
-        .map_or(current_line.end_ms, |sub| {
-            sub.end_ms.max(current_line.end_ms)
-        });
-
-    if current_end_ms == 0 {
+    if current_line.end_ms == 0 {
         return Ok(());
     }
 
     match mode {
         LrcEndTimeOutputMode::Never => { /* 什么也不做 */ }
         LrcEndTimeOutputMode::Always => {
-            writeln!(output, "{}", format_lrc_time_ms(current_end_ms))?;
+            writeln!(output, "{}", format_lrc_time_ms(current_line.end_ms))?;
         }
         LrcEndTimeOutputMode::OnLongPause { threshold_ms } => {
             if let Some(next_start) = next_line_start_ms {
-                // 如果与下一行的间隔超过阈值
-                if next_start.saturating_sub(current_end_ms) > threshold_ms {
-                    writeln!(output, "{}", format_lrc_time_ms(current_end_ms))?;
+                if next_start.saturating_sub(current_line.end_ms) > threshold_ms {
+                    writeln!(output, "{}", format_lrc_time_ms(current_line.end_ms))?;
                 }
             } else {
-                // 这是文件的最后一行歌词，也输出结束标记
-                writeln!(output, "{}", format_lrc_time_ms(current_end_ms))?;
+                writeln!(output, "{}", format_lrc_time_ms(current_line.end_ms))?;
             }
         }
     }

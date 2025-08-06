@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::converter::{
     processors::metadata_processor::MetadataStore,
-    types::{ConvertError, LyricLine},
+    types::{ContentType, ConvertError, LyricLine},
 };
 
 /// LYL 生成的主入口函数。
@@ -17,25 +17,30 @@ pub fn generate_lyl(
     writeln!(output, "[type:LyricifyLines]")?;
 
     for line in lines {
-        // 优先使用 `line.line_text`
-        let text_to_write = if let Some(text) = &line.line_text {
-            text.clone()
-        } else if !line.main_syllables.is_empty() {
-            // `line_text` 不存在，则从 `main_syllables` 拼接文本
-            line.main_syllables
+        // 从主内容轨道提取文本
+        if let Some(main_track) = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Main)
+        {
+            let text_to_write: String = main_track
+                .content
+                .words
                 .iter()
+                .flat_map(|w| &w.syllables)
                 .map(|s| s.text.as_str())
-                .collect::<Vec<&str>>()
-                .join("")
-        } else {
-            continue;
-        };
+                .collect();
 
-        writeln!(
-            output,
-            "[{},{}]{}",
-            line.start_ms, line.end_ms, text_to_write
-        )?;
+            if text_to_write.is_empty() {
+                continue;
+            }
+
+            writeln!(
+                output,
+                "[{},{}]{}",
+                line.start_ms, line.end_ms, text_to_write
+            )?;
+        }
     }
 
     Ok(output)

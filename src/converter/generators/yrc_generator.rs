@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::converter::{
     processors::metadata_processor::MetadataStore,
-    types::{CanonicalMetadataKey, ConvertError, LyricLine},
+    types::{CanonicalMetadataKey, ContentType, ConvertError, LyricLine},
 };
 
 /// YRC 生成的主入口函数。
@@ -58,20 +58,34 @@ pub fn generate_yrc(
     }
 
     for line in lines {
-        if line.main_syllables.is_empty() {
-            continue;
+        if let Some(main_track) = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Main)
+        {
+            let syllables: Vec<_> = main_track
+                .content
+                .words
+                .iter()
+                .flat_map(|w| &w.syllables)
+                .collect();
+            if syllables.is_empty() {
+                continue;
+            }
+
+            let line_duration = line.end_ms.saturating_sub(line.start_ms);
+            write!(yrc_output, "[{},{}]", line.start_ms, line_duration)?;
+
+            for syl in syllables {
+                let syl_duration = syl.end_ms.saturating_sub(syl.start_ms);
+                write!(
+                    yrc_output,
+                    "({},{},0){}",
+                    syl.start_ms, syl_duration, syl.text
+                )?;
+            }
+            writeln!(yrc_output)?;
         }
-        let line_duration = line.end_ms.saturating_sub(line.start_ms);
-        write!(yrc_output, "[{},{}]", line.start_ms, line_duration)?;
-        for syl in &line.main_syllables {
-            let syl_duration = syl.end_ms.saturating_sub(syl.start_ms);
-            write!(
-                yrc_output,
-                "({},{},0){}",
-                syl.start_ms, syl_duration, syl.text
-            )?;
-        }
-        writeln!(yrc_output)?;
     }
 
     Ok(yrc_output)

@@ -2,14 +2,16 @@
 
 use std::collections::HashMap;
 
+use crate::converter::{
+    types::{
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
+        LyricTrack, ParsedSourceData, Word,
+    },
+    utils::process_syllable_text,
+};
 use regex::Regex;
 use serde_json::Value;
 use std::sync::LazyLock;
-
-use crate::converter::{
-    types::{ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData},
-    utils::process_syllable_text,
-};
 
 /// 匹配 YRC 行级时间戳 `[start,duration]`
 static YRC_LINE_TIMESTAMP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -31,20 +33,10 @@ fn parse_yrc_line(line_str: &str, line_num: usize) -> Result<LyricLine, ConvertE
         ))
     })?;
 
-    let line_start_ms: u64 = line_ts_cap["start"]
-        .parse()
-        .map_err(ConvertError::ParseInt)?;
-    let line_duration_ms: u64 = line_ts_cap["duration"]
-        .parse()
-        .map_err(ConvertError::ParseInt)?;
+    let line_start_ms: u64 = line_ts_cap["start"].parse()?;
+    let line_duration_ms: u64 = line_ts_cap["duration"].parse()?;
 
-    let content_after_line_ts = if let Some(m) = line_ts_cap.get(0) {
-        &line_str[m.end()..]
-    } else {
-        return Err(ConvertError::InvalidLyricFormat(
-            "无法获取 YRC 行时间戳的匹配范围".into(),
-        ));
-    };
+    let content_after_line_ts = &line_str[line_ts_cap.get(0).unwrap().end()..];
 
     let mut syllables: Vec<LyricSyllable> = Vec::new();
     let timestamp_matches: Vec<_> = YRC_SYLLABLE_TIMESTAMP_REGEX
@@ -66,10 +58,8 @@ fn parse_yrc_line(line_str: &str, line_num: usize) -> Result<LyricLine, ConvertE
             let captures = YRC_SYLLABLE_TIMESTAMP_REGEX
                 .captures(ts_match.as_str())
                 .unwrap();
-            let syl_start_ms: u64 = captures["start"].parse().map_err(ConvertError::ParseInt)?;
-            let syl_duration_ms: u64 = captures["duration"]
-                .parse()
-                .map_err(ConvertError::ParseInt)?;
+            let syl_start_ms: u64 = captures["start"].parse()?;
+            let syl_duration_ms: u64 = captures["duration"].parse()?;
 
             syllables.push(LyricSyllable {
                 text: clean_text,
@@ -81,24 +71,26 @@ fn parse_yrc_line(line_str: &str, line_num: usize) -> Result<LyricLine, ConvertE
         }
     }
 
-    let full_line_text = syllables
-        .iter()
-        .map(|s| {
-            if s.ends_with_space {
-                format!("{} ", s.text)
-            } else {
-                s.text.clone()
-            }
-        })
-        .collect::<String>()
-        .trim_end()
-        .to_string();
+    let words = vec![Word {
+        syllables,
+        ..Default::default()
+    }];
+
+    let content_track = LyricTrack {
+        words,
+        ..Default::default()
+    };
+
+    let annotated_track = AnnotatedTrack {
+        content_type: ContentType::Main,
+        content: content_track,
+        ..Default::default()
+    };
 
     Ok(LyricLine {
         start_ms: line_start_ms,
         end_ms: line_start_ms + line_duration_ms,
-        line_text: Some(full_line_text),
-        main_syllables: syllables,
+        tracks: vec![annotated_track],
         ..Default::default()
     })
 }

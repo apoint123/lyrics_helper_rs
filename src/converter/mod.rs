@@ -8,7 +8,9 @@ pub mod utils;
 
 use std::collections::HashMap;
 
-pub use types::{LyricFormat, LyricLine, LyricSyllable};
+pub use types::{
+    FuriganaSyllable, LyricFormat, LyricLine, LyricSyllable, LyricTrack, TrackMetadataKey, Word,
+};
 
 use crate::converter::{
     processors::{
@@ -16,8 +18,8 @@ use crate::converter::{
         metadata_processor::MetadataStore,
     },
     types::{
-        ConversionInput, ConversionOptions, ConversionResult, ConversionTask, ConvertError,
-        FullConversionResult, InputFile, ParsedSourceData,
+        ContentType, ConversionInput, ConversionOptions, ConversionResult, ConversionTask,
+        ConvertError, FullConversionResult, InputFile, ParsedSourceData,
     },
 };
 use tracing::{debug, warn};
@@ -114,31 +116,32 @@ pub fn generate_from_parsed(
 
     metadata_store.deduplicate_values();
 
-    let chinese_processor = ChineseConversionProcessor::new();
-    chinese_processor.process(&mut source_data.lines, &options.chinese_conversion);
-
     let output_lyrics = match target_format {
         LyricFormat::Lrc => generators::lrc_generator::generate_lrc(
             &source_data.lines,
             &metadata_store,
             &options.lrc,
         ),
+
         LyricFormat::EnhancedLrc => generators::enhanced_lrc_generator::generate_enhanced_lrc(
             &source_data.lines,
             &metadata_store,
             &options.lrc,
         ),
+
         LyricFormat::Ass => generators::ass_generator::generate_ass(
             &source_data.lines,
             &metadata_store,
-            false,
+            source_data.is_line_timed_source,
             &options.ass,
         ),
+
         LyricFormat::Ttml => generators::ttml_generator::generate_ttml(
             &source_data.lines,
             &metadata_store,
             &options.ttml,
         ),
+
         LyricFormat::AppleMusicJson => {
             generators::apple_music_json_generator::generate_apple_music_json(
                 &source_data.lines,
@@ -149,20 +152,25 @@ pub fn generate_from_parsed(
         LyricFormat::Qrc => {
             generators::qrc_generator::generate_qrc(&source_data.lines, &metadata_store)
         }
+
         LyricFormat::Lqe => generators::lqe_generator::generate_lqe(
             &source_data.lines,
             &metadata_store,
             &options.lqe,
         ),
+
         LyricFormat::Krc => {
             generators::krc_generator::generate_krc(&source_data.lines, &metadata_store)
         }
+
         LyricFormat::Yrc => {
             generators::yrc_generator::generate_yrc(&source_data.lines, &metadata_store)
         }
+
         LyricFormat::Lys => {
             generators::lys_generator::generate_lys(&source_data.lines, &metadata_store)
         }
+
         LyricFormat::Spl => {
             generators::spl_generator::generate_spl(&source_data.lines, &metadata_store)
         }
@@ -190,40 +198,153 @@ pub fn parse_and_merge(
     input: &ConversionInput,
     options: &ConversionOptions,
 ) -> Result<ParsedSourceData, ConvertError> {
-    let mut main_parsed = parse_input_file(&input.main_lyric, options)?;
+    let mut main_parsed_source = parse_input_file(&input.main_lyric, options)?;
+    let mut main_new_lines = main_parsed_source.lines; // 直接获取，因为类型已经是新的 LyricLine
+    main_parsed_source.lines = vec![]; // 临时清空，最后会重新赋值
 
-    let translation_parsed_data: Vec<_> = input
-        .translations
-        .iter()
-        .map(|f| parse_input_file_with_lang(f, options))
-        .collect::<Result<_, _>>()?;
-
-    let romanization_parsed_data: Vec<_> = input
-        .romanizations
-        .iter()
-        .map(|f| parse_input_file_with_lang(f, options))
-        .collect::<Result<_, _>>()?;
-
-    for (parsed, _lang) in translation_parsed_data
-        .iter()
-        .chain(romanization_parsed_data.iter())
-    {
-        main_parsed.raw_metadata.extend(parsed.raw_metadata.clone());
+    let mut translation_sources = vec![];
+    for file in &input.translations {
+        let mut parsed_source = parse_input_file(file, options)?;
+        let new_lines = parsed_source.lines;
+        parsed_source.lines = vec![];
+        translation_sources.push((new_lines, parsed_source, file.language.clone()));
     }
 
-    merge_lyric_lines(
-        &mut main_parsed.lines,
-        &translation_parsed_data,
-        &romanization_parsed_data,
+    let mut romanization_sources = vec![];
+    for file in &input.romanizations {
+        let mut parsed_source = parse_input_file(file, options)?;
+        let new_lines = parsed_source.lines;
+        parsed_source.lines = vec![];
+        romanization_sources.push((new_lines, parsed_source, file.language.clone()));
+    }
+
+    // 合并元数据
+    for (_, source, _) in translation_sources
+        .iter()
+        .chain(romanization_sources.iter())
+    {
+        main_parsed_source
+            .raw_metadata
+            .extend(source.raw_metadata.clone());
+    }
+
+    merge_tracks(
+        &mut main_new_lines,
+        &translation_sources,
+        &romanization_sources,
         options.matching_strategy,
     );
 
+    let chinese_processor = ChineseConversionProcessor::new();
+    chinese_processor.process(&mut main_new_lines, &options.chinese_conversion);
+
     processors::metadata_stripper::strip_descriptive_metadata_lines(
-        &mut main_parsed.lines,
+        &mut main_new_lines,
         &options.metadata_stripper,
     );
 
-    Ok(main_parsed)
+    main_parsed_source.lines = main_new_lines;
+
+    Ok(main_parsed_source)
+}
+
+/// 合并主歌词行与翻译、罗马音数据，将翻译和罗马音轨道按时间戳插入到主歌词行中。
+pub fn merge_tracks(
+    main_lines: &mut [LyricLine],
+    translations: &[(Vec<LyricLine>, ParsedSourceData, Option<String>)],
+    romanizations: &[(Vec<LyricLine>, ParsedSourceData, Option<String>)],
+    strategy: types::AuxiliaryLineMatchingStrategy,
+) {
+    if translations.is_empty() && romanizations.is_empty() {
+        return;
+    }
+
+    let tolerance_ms = match strategy {
+        types::AuxiliaryLineMatchingStrategy::SortedSync { tolerance_ms } => tolerance_ms,
+        _ => {
+            warn!("仅支持 'SortedSync' 合并策略，已回退到默认容差 20ms。");
+            20
+        }
+    };
+
+    // 辅助函数：从源数据中提取带时间戳的内容轨道
+    fn extract_content_tracks(
+        sources: &[(Vec<LyricLine>, ParsedSourceData, Option<String>)],
+    ) -> Vec<(u64, u64, LyricTrack)> {
+        let mut timed_tracks = Vec::new();
+        for (lines, _, lang) in sources {
+            for line in lines {
+                // 辅助文件的一行理论上只包含一个带主要内容的 AnnotatedTrack
+                if let Some(annotated_track) = line.tracks.first() {
+                    let mut content_track = annotated_track.content.clone();
+                    // 如果轨道本身没有语言标签，则使用文件级别的语言标签
+                    if let Some(l) = lang {
+                        content_track
+                            .metadata
+                            .entry(TrackMetadataKey::Language)
+                            .or_insert_with(|| l.clone());
+                    }
+                    timed_tracks.push((line.start_ms, line.end_ms, content_track));
+                }
+            }
+        }
+        timed_tracks.sort_by_key(|(start_ms, _, _)| *start_ms);
+        timed_tracks
+    }
+
+    let translation_tracks = extract_content_tracks(translations);
+    let romanization_tracks = extract_content_tracks(romanizations);
+
+    let mut trans_iter = translation_tracks.iter().peekable();
+    let mut roman_iter = romanization_tracks.iter().peekable();
+
+    for main_line in main_lines.iter_mut() {
+        // 假设主歌词行中有一个我们将要合并到的主要内容轨道
+        if let Some(main_annotated_track) = main_line
+            .tracks
+            .iter_mut()
+            .find(|at| at.content_type == ContentType::Main)
+        {
+            // 跳过所有时间上已经不可能匹配的旧翻译行
+            while let Some((start_ms, ..)) = trans_iter.peek() {
+                if *start_ms + tolerance_ms < main_line.start_ms {
+                    trans_iter.next();
+                } else {
+                    break; // 到达了可能匹配的窗口
+                }
+            }
+            // 匹配并消耗所有在当前主行时间窗口内的翻译行
+            while let Some((start_ms, end_ms, track)) = trans_iter.peek() {
+                if (*start_ms as i64 - main_line.start_ms as i64).unsigned_abs() <= tolerance_ms {
+                    main_annotated_track.translations.push((*track).clone());
+                    main_line.end_ms = main_line.end_ms.max(*end_ms);
+                    trans_iter.next(); // 匹配成功, 消耗掉
+                } else {
+                    // 由于列表已排序，此翻译行已在当前主行窗口之外，
+                    // 后续的翻译行更不可能匹配，故中断循环。
+                    // 迭代器指针将留在这里，供下一个主行匹配。
+                    break;
+                }
+            }
+
+            while let Some((start_ms, ..)) = roman_iter.peek() {
+                if *start_ms + tolerance_ms < main_line.start_ms {
+                    roman_iter.next();
+                } else {
+                    break;
+                }
+            }
+            while let Some((start_ms, end_ms, track)) = roman_iter.peek() {
+                if (*start_ms as i64 - main_line.start_ms as i64).unsigned_abs() <= tolerance_ms {
+                    main_annotated_track.romanizations.push((*track).clone());
+                    main_line.end_ms = main_line.end_ms.max(*end_ms);
+                    roman_iter.next();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // ==========================================================
@@ -253,208 +374,5 @@ fn parse_input_file(
         LyricFormat::Spl => parsers::spl_parser::parse_spl(&file.content),
         LyricFormat::Lqe => parsers::lqe_parser::parse_lqe(&file.content, options),
         LyricFormat::Lyl => parsers::lyricify_lines_parser::parse_lyl(&file.content),
-    }
-}
-
-/// `parse_input_file` 的一个包装，同时返回解析数据和文件本身的语言标签。
-fn parse_input_file_with_lang(
-    file: &InputFile,
-    options: &ConversionOptions,
-) -> Result<(ParsedSourceData, Option<String>), ConvertError> {
-    Ok((parse_input_file(file, options)?, file.language.clone()))
-}
-
-/// 合并主歌词行与翻译、罗马音数据，将翻译和罗马音按时间戳插入到主歌词行中。
-///
-/// # 参数
-/// * `main_lines` - 主歌词行的可变引用，将被插入翻译和罗马音。
-/// * `translations` - 包含翻译歌词数据及其语言标签的元组切片。
-/// * `romanizations` - 包含罗马音歌词数据及其语言标签的元组切片。
-/// * `strategy` - 用于匹配主歌词行和辅助歌词行时间戳的策略。
-fn merge_lyric_lines(
-    main_lines: &mut [LyricLine],
-    translations: &[(ParsedSourceData, Option<String>)],
-    romanizations: &[(ParsedSourceData, Option<String>)],
-    strategy: types::AuxiliaryLineMatchingStrategy,
-) {
-    if translations.is_empty() && romanizations.is_empty() {
-        return;
-    }
-
-    // 翻译合并逻辑
-    if !translations.is_empty() {
-        match strategy {
-            types::AuxiliaryLineMatchingStrategy::Exact => {
-                let mut map = std::collections::HashMap::new();
-                for (data, lang) in translations {
-                    for line in &data.lines {
-                        let entries = map.entry(line.start_ms).or_insert_with(Vec::new);
-                        if !line.translations.is_empty() {
-                            entries.extend_from_slice(&line.translations);
-                        } else if let Some(text) = &line.line_text {
-                            entries.push(types::TranslationEntry {
-                                text: text.clone(),
-                                lang: lang.clone(),
-                            });
-                        }
-                    }
-                }
-                for main_line in main_lines.iter_mut() {
-                    if let Some(entries) = map.get(&main_line.start_ms) {
-                        main_line.translations.extend_from_slice(entries);
-                    }
-                }
-            }
-            types::AuxiliaryLineMatchingStrategy::Tolerance { tolerance_ms } => {
-                for main_line in main_lines.iter_mut() {
-                    for (data, lang) in translations {
-                        for line in &data.lines {
-                            if (main_line.start_ms as i64 - line.start_ms as i64).unsigned_abs()
-                                <= tolerance_ms
-                            {
-                                if !line.translations.is_empty() {
-                                    main_line.translations.extend_from_slice(&line.translations);
-                                } else if let Some(text) = &line.line_text {
-                                    main_line.translations.push(types::TranslationEntry {
-                                        text: text.clone(),
-                                        lang: lang.clone(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            types::AuxiliaryLineMatchingStrategy::SortedSync { tolerance_ms } => {
-                let mut all_aux_lines: Vec<_> = translations
-                    .iter()
-                    .flat_map(|(data, lang)| {
-                        data.lines.iter().map(move |line| (line, lang.clone()))
-                    })
-                    .collect();
-                all_aux_lines.sort_by_key(|(line, _)| line.start_ms);
-                let mut aux_iter = all_aux_lines.iter().peekable();
-
-                for main_line in main_lines.iter_mut() {
-                    while let Some((line, _)) = aux_iter.peek() {
-                        if line.start_ms + tolerance_ms < main_line.start_ms {
-                            aux_iter.next();
-                        } else {
-                            break;
-                        }
-                    }
-
-                    for (line, lang) in aux_iter.clone() {
-                        if (line.start_ms as i64 - main_line.start_ms as i64).unsigned_abs()
-                            <= tolerance_ms
-                        {
-                            if !line.translations.is_empty() {
-                                main_line.translations.extend_from_slice(&line.translations);
-                            } else if let Some(text) = &line.line_text {
-                                main_line.translations.push(types::TranslationEntry {
-                                    text: text.clone(),
-                                    lang: lang.clone(),
-                                });
-                            }
-                        }
-                        if line.start_ms > main_line.start_ms + tolerance_ms {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 罗马音合并逻辑
-    if !romanizations.is_empty() {
-        match strategy {
-            types::AuxiliaryLineMatchingStrategy::Exact => {
-                let mut map = std::collections::HashMap::new();
-                for (data, lang) in romanizations {
-                    for line in &data.lines {
-                        let entries = map.entry(line.start_ms).or_insert_with(Vec::new);
-                        if !line.romanizations.is_empty() {
-                            entries.extend_from_slice(&line.romanizations);
-                        } else if let Some(text) = &line.line_text {
-                            entries.push(types::RomanizationEntry {
-                                text: text.clone(),
-                                lang: lang.clone(),
-                                scheme: None,
-                            });
-                        }
-                    }
-                }
-                for main_line in main_lines.iter_mut() {
-                    if let Some(entries) = map.get(&main_line.start_ms) {
-                        main_line.romanizations.extend_from_slice(entries);
-                    }
-                }
-            }
-            types::AuxiliaryLineMatchingStrategy::Tolerance { tolerance_ms } => {
-                for main_line in main_lines.iter_mut() {
-                    for (data, lang) in romanizations {
-                        for line in &data.lines {
-                            if (main_line.start_ms as i64 - line.start_ms as i64).unsigned_abs()
-                                <= tolerance_ms
-                            {
-                                if !line.romanizations.is_empty() {
-                                    main_line
-                                        .romanizations
-                                        .extend_from_slice(&line.romanizations);
-                                } else if let Some(text) = &line.line_text {
-                                    main_line.romanizations.push(types::RomanizationEntry {
-                                        text: text.clone(),
-                                        lang: lang.clone(),
-                                        scheme: None,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            types::AuxiliaryLineMatchingStrategy::SortedSync { tolerance_ms } => {
-                let mut all_aux_lines: Vec<_> = romanizations
-                    .iter()
-                    .flat_map(|(data, lang)| {
-                        data.lines.iter().map(move |line| (line, lang.clone()))
-                    })
-                    .collect();
-                all_aux_lines.sort_by_key(|(line, _)| line.start_ms);
-                let mut aux_iter = all_aux_lines.iter().peekable();
-
-                for main_line in main_lines.iter_mut() {
-                    while let Some((line, _)) = aux_iter.peek() {
-                        if line.start_ms + tolerance_ms < main_line.start_ms {
-                            aux_iter.next();
-                        } else {
-                            break;
-                        }
-                    }
-
-                    for (line, lang) in aux_iter.clone() {
-                        if (line.start_ms as i64 - main_line.start_ms as i64).unsigned_abs()
-                            <= tolerance_ms
-                        {
-                            if !line.romanizations.is_empty() {
-                                main_line
-                                    .romanizations
-                                    .extend_from_slice(&line.romanizations);
-                            } else if let Some(text) = &line.line_text {
-                                main_line.romanizations.push(types::RomanizationEntry {
-                                    text: text.clone(),
-                                    lang: lang.clone(),
-                                    scheme: None,
-                                });
-                            }
-                        }
-                        if line.start_ms > main_line.start_ms + tolerance_ms {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
     }
 }

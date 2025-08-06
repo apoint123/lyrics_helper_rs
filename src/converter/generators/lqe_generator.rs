@@ -3,7 +3,10 @@
 use crate::converter::{
     generators,
     processors::metadata_processor::MetadataStore,
-    types::{ConvertError, LqeGenerationOptions, LyricFormat, LyricLine},
+    types::{
+        AnnotatedTrack, ContentType, ConvertError, LqeGenerationOptions, LyricFormat, LyricLine,
+        TrackMetadataKey,
+    },
 };
 
 /// LQE 生成的主入口函数。
@@ -18,15 +21,13 @@ pub fn generate_lqe(
     writer.push_str("[version:1.0]\n");
 
     let lrc_header = metadata_store.generate_lrc_header();
-    writer.push_str(&lrc_header);
-
     if !lrc_header.is_empty() {
+        writer.push_str(&lrc_header);
         writer.push('\n');
     }
 
     let main_lang =
         metadata_store.get_single_value(&crate::converter::types::CanonicalMetadataKey::Language);
-
     let lang_attr = main_lang.map_or("und", |s| s.as_str());
 
     writer.push_str(&format!(
@@ -39,29 +40,51 @@ pub fn generate_lqe(
     writer.push_str(&main_content);
     writer.push_str("\n\n");
 
-    let all_translations: Vec<_> = lines.iter().flat_map(|l| l.translations.iter()).collect();
-    if !all_translations.is_empty() {
-        let trans_lang = all_translations
+    // 翻译区块
+    let translation_lines: Vec<LyricLine> = lines
+        .iter()
+        .filter_map(|line| {
+            let trans_tracks: Vec<_> = line
+                .tracks
+                .iter()
+                .flat_map(|at| at.translations.iter().cloned())
+                .collect();
+
+            if trans_tracks.is_empty() {
+                None
+            } else {
+                let annotated_tracks = trans_tracks
+                    .into_iter()
+                    .map(|track| AnnotatedTrack {
+                        content_type: ContentType::Main,
+                        content: track,
+                        translations: vec![],
+                        romanizations: vec![],
+                    })
+                    .collect();
+                Some(LyricLine {
+                    tracks: annotated_tracks,
+                    ..line.clone()
+                })
+            }
+        })
+        .collect();
+
+    if !translation_lines.is_empty() {
+        let trans_lang = translation_lines
             .iter()
-            .find_map(|t| t.lang.as_ref())
+            .find_map(|l| {
+                l.tracks
+                    .first()
+                    .and_then(|t| t.content.metadata.get(&TrackMetadataKey::Language))
+            })
             .map_or("und", |s| s.as_str());
+
         writer.push_str(&format!(
             "[translation: format@{}, language@{}]\n",
             options.auxiliary_format.to_extension_str(),
             trans_lang
         ));
-
-        let translation_lines: Vec<LyricLine> = lines
-            .iter()
-            .map(|line| {
-                let trans_text = line.translations.first().map(|t| t.text.clone());
-                LyricLine {
-                    line_text: trans_text,
-                    ..line.clone()
-                }
-            })
-            .filter(|l| l.line_text.is_some())
-            .collect();
 
         let translation_content =
             generate_sub_format(&translation_lines, metadata_store, options.auxiliary_format)?;
@@ -69,29 +92,51 @@ pub fn generate_lqe(
         writer.push_str("\n\n");
     }
 
-    let all_romanizations: Vec<_> = lines.iter().flat_map(|l| l.romanizations.iter()).collect();
-    if !all_romanizations.is_empty() {
-        let roma_lang = all_romanizations
+    // 罗马音区块
+    let romanization_lines: Vec<LyricLine> = lines
+        .iter()
+        .filter_map(|line| {
+            let roma_tracks: Vec<_> = line
+                .tracks
+                .iter()
+                .flat_map(|at| at.romanizations.iter().cloned())
+                .collect();
+
+            if roma_tracks.is_empty() {
+                None
+            } else {
+                let annotated_tracks = roma_tracks
+                    .into_iter()
+                    .map(|track| AnnotatedTrack {
+                        content_type: ContentType::Main,
+                        content: track,
+                        translations: vec![],
+                        romanizations: vec![],
+                    })
+                    .collect();
+                Some(LyricLine {
+                    tracks: annotated_tracks,
+                    ..line.clone()
+                })
+            }
+        })
+        .collect();
+
+    if !romanization_lines.is_empty() {
+        let roma_lang = romanization_lines
             .iter()
-            .find_map(|r| r.lang.as_ref())
+            .find_map(|l| {
+                l.tracks
+                    .first()
+                    .and_then(|t| t.content.metadata.get(&TrackMetadataKey::Language))
+            })
             .map_or("romaji", |s| s.as_str());
+
         writer.push_str(&format!(
             "[pronunciation: format@{}, language@{}]\n",
             options.auxiliary_format.to_extension_str(),
             roma_lang
         ));
-
-        let romanization_lines: Vec<LyricLine> = lines
-            .iter()
-            .map(|line| {
-                let roma_text = line.romanizations.first().map(|r| r.text.clone());
-                LyricLine {
-                    line_text: roma_text,
-                    ..line.clone()
-                }
-            })
-            .filter(|l| l.line_text.is_some())
-            .collect();
 
         let romanization_content = generate_sub_format(
             &romanization_lines,
@@ -101,7 +146,7 @@ pub fn generate_lqe(
         writer.push_str(&romanization_content);
     }
 
-    Ok(writer.trim_end().to_string())
+    Ok(writer.trim().to_string())
 }
 
 fn generate_sub_format(

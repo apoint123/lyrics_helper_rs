@@ -9,11 +9,12 @@
 use std::io::{self, Write};
 
 use lyrics_helper_rs::converter::processors::agent_recognizer;
+use lyrics_helper_rs::converter::types::TtmlGenerationOptions;
 use lyrics_helper_rs::error::Result;
 use lyrics_helper_rs::model::track::Track;
 use lyrics_helper_rs::{
     LyricsHelper,
-    converter::{self, processors::metadata_processor::MetadataStore, types::ConversionOptions},
+    converter::{self, processors::metadata_processor::MetadataStore},
 };
 
 use tracing::{Level, error, info};
@@ -57,14 +58,15 @@ async fn main() -> Result<()> {
         .provider_id_num
         .map(|id| id.to_string())
         .unwrap_or_else(|| selected_result.provider_id.clone());
-    let mut parsed_lyrics = helper
+    let mut parsed_lyrics_data = helper
         .get_full_lyrics(&selected_result.provider_name, &song_id_for_lyrics)?
         .await?;
-    agent_recognizer::recognize_agents(&mut parsed_lyrics.parsed.lines);
+
+    agent_recognizer::recognize_agents(&mut parsed_lyrics_data.parsed.lines);
     info!("歌词获取并解析成功！");
 
     // 从解析的歌词文件内部创建基础元数据存储。
-    let mut metadata_store = MetadataStore::from(&parsed_lyrics.parsed);
+    let mut metadata_store = MetadataStore::from(&parsed_lyrics_data.parsed);
 
     // 使用从 API 获取的 `SearchResult` 信息来覆盖元数据。
     info!("设置标题: {}", &selected_result.title);
@@ -87,9 +89,9 @@ async fn main() -> Result<()> {
 
     info!("正在将歌词转换为 TTML 格式...");
 
-    let ttml_options = ConversionOptions::default().ttml;
+    let ttml_options = TtmlGenerationOptions::default();
     let ttml_output = converter::generators::ttml_generator::generate_ttml(
-        &parsed_lyrics.parsed.lines,
+        &parsed_lyrics_data.parsed.lines,
         &metadata_store,
         &ttml_options,
     )?;

@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::converter::{
     processors::metadata_processor::MetadataStore,
-    types::{ConvertError, LyricLine, LyricSyllable},
+    types::{ContentType, ConvertError, LyricLine, Word},
 };
 
 /// QRC 生成的主入口函数。
@@ -16,51 +16,74 @@ pub fn generate_qrc(
 
     writeln!(qrc_output, "{}", metadata_store.generate_lrc_header())?;
 
-    // 遍历所有 LyricLine，依次生成主歌词行和背景人声行
     for line in lines {
-        if !line.main_syllables.is_empty() {
-            // 获取第一个和最后一个音节，确定整行的时间范围
-            if let (Some(first_syl), Some(last_syl)) =
-                (line.main_syllables.first(), line.main_syllables.last())
-            {
-                let line_start_ms = first_syl.start_ms;
-                let line_end_ms = last_syl.end_ms;
-                let line_duration_ms = line_end_ms.saturating_sub(line_start_ms);
-
-                write!(qrc_output, "[{line_start_ms},{line_duration_ms}]")?;
-                write_syllables_to_qrc_string(&mut qrc_output, &line.main_syllables, false)?;
-                writeln!(qrc_output)?;
+        // 主歌词行
+        if let Some(main_track) = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Main)
+        {
+            if !main_track.content.words.is_empty() {
+                writeln!(
+                    qrc_output,
+                    "[{},{}]{}",
+                    line.start_ms,
+                    line.end_ms.saturating_sub(line.start_ms),
+                    build_qrc_text_from_words(&main_track.content.words, false)?
+                )?;
             }
         }
-
-        if let Some(bg_section) = &line.background_section
-            && !bg_section.syllables.is_empty()
-            && let (Some(first_syl), Some(last_syl)) =
-                (bg_section.syllables.first(), bg_section.syllables.last())
+        // 背景人声行
+        if let Some(bg_track) = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Background)
         {
-            let line_start_ms = first_syl.start_ms;
-            let line_end_ms = last_syl.end_ms;
-            let line_duration_ms = line_end_ms.saturating_sub(line_start_ms);
+            if !bg_track.content.words.is_empty() {
+                let bg_start_ms = bg_track
+                    .content
+                    .words
+                    .iter()
+                    .flat_map(|w| &w.syllables)
+                    .map(|s| s.start_ms)
+                    .min()
+                    .unwrap_or(line.start_ms);
+                let bg_end_ms = bg_track
+                    .content
+                    .words
+                    .iter()
+                    .flat_map(|w| &w.syllables)
+                    .map(|s| s.end_ms)
+                    .max()
+                    .unwrap_or(line.end_ms);
 
-            write!(qrc_output, "[{line_start_ms},{line_duration_ms}]")?;
-            write_syllables_to_qrc_string(&mut qrc_output, &bg_section.syllables, true)?;
-            writeln!(qrc_output)?;
+                writeln!(
+                    qrc_output,
+                    "[{},{}]{}",
+                    bg_start_ms,
+                    bg_end_ms.saturating_sub(bg_start_ms),
+                    build_qrc_text_from_words(&bg_track.content.words, true)?
+                )?;
+            }
         }
     }
 
     Ok(qrc_output)
 }
 
-/// 辅助函数，将音节列表格式化为 QRC 行的文本部分。
-fn write_syllables_to_qrc_string(
-    output: &mut String,
-    syllables: &[LyricSyllable],
+/// 辅助函数，将词语列表格式化为 QRC 行的文本部分。
+fn build_qrc_text_from_words(
+    words: &[Word],
     is_background: bool,
-) -> Result<(), std::fmt::Error> {
+) -> Result<String, std::fmt::Error> {
+    let mut output = String::new();
+    let syllables: Vec<_> = words.iter().flat_map(|w| &w.syllables).collect();
+    let total_syllable_count = syllables.len();
+
     for (i, syl) in syllables.iter().enumerate() {
         let duration_ms = syl.end_ms.saturating_sub(syl.start_ms);
         let is_first = i == 0;
-        let is_last = i == syllables.len() - 1;
+        let is_last = i == total_syllable_count - 1;
 
         if is_background {
             if is_first && is_last {
@@ -86,5 +109,5 @@ fn write_syllables_to_qrc_string(
         }
     }
 
-    Ok(())
+    Ok(output)
 }

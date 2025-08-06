@@ -822,7 +822,7 @@ mod integration_tests {
     use super::*;
     use crate::converter::generators::ttml_generator;
     use crate::converter::processors::metadata_processor::MetadataStore;
-    use crate::converter::types::ConversionOptions;
+    use crate::converter::types::TtmlGenerationOptions;
 
     fn init_tracing() {
         use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -847,9 +847,9 @@ mod integration_tests {
         helper.load_providers().await.unwrap();
 
         let track_to_search = Track {
-            title: Some("内向都是作曲家"),
-            artists: Some(&["Yunomi"]),
-            album: None,
+            title: Some("インドア系ならトラックメイカー"),
+            artists: Some(&["Yunomi", "nicamoq"]),
+            album: Some("インドア系ならトラックメイカー"),
             duration: None,
         };
 
@@ -878,11 +878,14 @@ mod integration_tests {
         let parsed_data = full_lyrics_result.parsed;
 
         let has_main_lyric = !parsed_data.lines.is_empty();
-        let has_translation = parsed_data.lines.iter().any(|l| !l.translations.is_empty());
+        let has_translation = parsed_data
+            .lines
+            .iter()
+            .any(|l| !l.get_translation_tracks().is_empty());
         let has_romanization = parsed_data
             .lines
             .iter()
-            .any(|l| !l.romanizations.is_empty());
+            .any(|l| !l.get_romanization_tracks().is_empty());
 
         assert!(has_main_lyric, "解析后的主歌词行不应为空");
         assert!(
@@ -891,9 +894,31 @@ mod integration_tests {
         );
 
         for line in parsed_data.lines.iter().take(5) {
-            let main_text = line.line_text.as_deref().unwrap_or("");
-            let translation_text = line.translations.first().map_or("N/A", |t| &t.text);
-            let romanization_text = line.romanizations.first().map_or("N/A", |r| &r.text);
+            let main_text = line.get_line_text().unwrap_or_default();
+            let translation_text =
+                line.get_translation_tracks()
+                    .first()
+                    .map_or("N/A".to_string(), |t| {
+                        t.words
+                            .iter()
+                            .flat_map(|w| &w.syllables)
+                            .map(|s| s.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("")
+                    });
+
+            let romanization_text =
+                line.get_romanization_tracks()
+                    .first()
+                    .map_or("N/A".to_string(), |t| {
+                        t.words
+                            .iter()
+                            .flat_map(|w| &w.syllables)
+                            .map(|s| s.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("")
+                    });
+
             println!(
                 "  - 主歌词: {main_text}\n    翻译: {translation_text}\n    罗马音: {romanization_text}"
             );
@@ -904,16 +929,13 @@ mod integration_tests {
         // 暂时省略元数据部分
         // for (key, values) in &parsed_data.raw_metadata { ... }
 
-        let ttml_options = ConversionOptions {
-            ttml: converter::types::TtmlGenerationOptions {
-                format: false,
-                ..Default::default()
-            },
+        let ttml_options = TtmlGenerationOptions {
+            format: false,
             ..Default::default()
         };
 
         let ttml_output =
-            ttml_generator::generate_ttml(&parsed_data.lines, &metadata_store, &ttml_options.ttml)
+            ttml_generator::generate_ttml(&parsed_data.lines, &metadata_store, &ttml_options)
                 .expect("生成 TTML 失败");
 
         assert!(ttml_output.starts_with("<tt"), "输出应为有效的 TTML 字符串");

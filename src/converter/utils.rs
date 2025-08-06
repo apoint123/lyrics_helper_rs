@@ -4,7 +4,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::converter::{LyricSyllable, types::LyricLine};
+use crate::converter::{LyricLine, LyricSyllable};
 
 /// 辅助函数，用于安全地将偏移量应用到 u64 时间戳上
 fn offset_timestamp(timestamp: u64, offset: i64) -> u64 {
@@ -31,21 +31,12 @@ pub fn apply_offset(lines: &mut [LyricLine], offset_ms: i64) {
         line.start_ms = offset_timestamp(line.start_ms, offset_ms);
         line.end_ms = offset_timestamp(line.end_ms, offset_ms);
 
-        // 调整主歌词音节的时间戳
-        for syl in line.main_syllables.iter_mut() {
-            syl.start_ms = offset_timestamp(syl.start_ms, offset_ms);
-            syl.end_ms = offset_timestamp(syl.end_ms, offset_ms);
-        }
-
-        // 如果存在，调整背景人声的时间戳
-        if let Some(bg_section) = line.background_section.as_mut() {
-            bg_section.start_ms = offset_timestamp(bg_section.start_ms, offset_ms);
-            bg_section.end_ms = offset_timestamp(bg_section.end_ms, offset_ms);
-
-            // 调整背景人声音节的时间戳
-            for bg_syl in bg_section.syllables.iter_mut() {
-                bg_syl.start_ms = offset_timestamp(bg_syl.start_ms, offset_ms);
-                bg_syl.end_ms = offset_timestamp(bg_syl.end_ms, offset_ms);
+        for track in &mut line.tracks {
+            for word in &mut track.content.words {
+                for syl in &mut word.syllables {
+                    syl.start_ms = offset_timestamp(syl.start_ms, offset_ms);
+                    syl.end_ms = offset_timestamp(syl.end_ms, offset_ms);
+                }
             }
         }
     }

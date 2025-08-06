@@ -4,7 +4,10 @@ use std::fmt::Write;
 
 use crate::converter::{
     processors::metadata_processor::MetadataStore,
-    types::{AssGenerationOptions, ConvertError, LyricLine, RomanizationEntry, TranslationEntry},
+    types::{
+        AssGenerationOptions, ContentType, ConvertError, LyricLine, LyricTrack, TrackMetadataKey,
+        Word,
+    },
 };
 
 /// 将毫秒时间格式化为 ASS 时间字符串 `H:MM:SS.CS` (小时:分钟:秒.厘秒)。
@@ -91,7 +94,6 @@ pub fn generate_ass(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
     )?;
 
-    // 写入元数据注释行
     for (key, values) in metadata_store.get_all_data() {
         for value in values {
             writeln!(
@@ -101,95 +103,113 @@ pub fn generate_ass(
         }
     }
 
-    // 遍历所有 LyricLine 生成 Dialogue 行
     for line in lines {
-        // 主歌词行
-        if !line.main_syllables.is_empty() || line.line_text.is_some() {
+        for annotated_track in &line.tracks {
+            let is_bg = annotated_track.content_type == ContentType::Background;
+            let style = if is_bg { "bg-main" } else { "Default" };
             let mut actor_field = line.agent.clone().unwrap_or_default();
-            if let Some(part) = &line.song_part {
+            if is_bg {
+                actor_field = "x-bg".to_string();
+            } else if let Some(part) = &line.song_part {
                 write!(actor_field, r#" itunes:song-part="{part}""#)?;
             }
 
-            let text_field = if is_line_timed {
-                line.line_text.clone().unwrap_or_default()
-            } else {
-                build_karaoke_text(line, false)?
-            };
+            write_dialogue_line(
+                &mut ass_content,
+                line,
+                &annotated_track.content,
+                style,
+                &actor_field,
+                is_line_timed,
+            )?;
 
-            if !text_field.trim().is_empty() {
-                writeln!(
-                    ass_content,
-                    "Dialogue: 0,{},{},Default,{},0,0,0,,{}",
-                    format_ass_time(line.start_ms),
-                    format_ass_time(line.end_ms),
-                    actor_field.trim(),
-                    text_field
+            let trans_style = if is_bg { "bg-ts" } else { "ts" };
+            for trans_track in &annotated_track.translations {
+                let actor = trans_track
+                    .metadata
+                    .get(&TrackMetadataKey::Language)
+                    .map_or(String::new(), |l| format!("x-lang:{l}"));
+                write_dialogue_line(
+                    &mut ass_content,
+                    line,
+                    trans_track,
+                    trans_style,
+                    &actor,
+                    is_line_timed,
                 )?;
             }
-        }
 
-        // 翻译和罗马音行
-        write_auxiliary_lines(
-            &mut ass_content,
-            line.start_ms,
-            line.end_ms,
-            &line.translations,
-            &line.romanizations,
-            false,
-        )?;
-
-        // 背景人声行
-        if let Some(bg_section) = &line.background_section {
-            if !bg_section.syllables.is_empty() {
-                let bg_text_field = build_karaoke_text(line, true)?;
-                if !bg_text_field.trim().is_empty() {
-                    writeln!(
-                        ass_content,
-                        "Dialogue: 0,{},{},bg-main,x-bg,0,0,0,,{}",
-                        format_ass_time(bg_section.start_ms),
-                        format_ass_time(bg_section.end_ms),
-                        bg_text_field
-                    )?;
-                }
+            let roma_style = if is_bg { "bg-roma" } else { "roma" };
+            for roma_track in &annotated_track.romanizations {
+                let actor = roma_track
+                    .metadata
+                    .get(&TrackMetadataKey::Language)
+                    .map_or(String::new(), |l| format!("x-lang:{l}"));
+                write_dialogue_line(
+                    &mut ass_content,
+                    line,
+                    roma_track,
+                    roma_style,
+                    &actor,
+                    is_line_timed,
+                )?;
             }
-            write_auxiliary_lines(
-                &mut ass_content,
-                bg_section.start_ms,
-                bg_section.end_ms,
-                &bg_section.translations,
-                &bg_section.romanizations,
-                true,
-            )?;
         }
     }
 
     Ok(ass_content)
 }
 
-/// 辅助函数，构建带 `\k` 标签的文本
-fn build_karaoke_text(line: &LyricLine, is_background: bool) -> Result<String, ConvertError> {
-    let syllables = if is_background {
-        if let Some(bg_section) = &line.background_section {
-            &bg_section.syllables
-        } else {
-            return Ok(String::new());
-        }
+fn write_dialogue_line(
+    output: &mut String,
+    line: &LyricLine,
+    track: &LyricTrack,
+    style: &str,
+    actor: &str,
+    is_line_timed: bool,
+) -> Result<(), ConvertError> {
+    let text_field = if is_line_timed {
+        track
+            .words
+            .iter()
+            .flat_map(|w| &w.syllables)
+            .map(|syl| {
+                if syl.ends_with_space {
+                    format!("{} ", syl.text)
+                } else {
+                    syl.text.clone()
+                }
+            })
+            .collect::<String>()
+            .trim_end()
+            .to_string()
     } else {
-        &line.main_syllables
+        build_karaoke_text(&track.words)?
     };
 
+    if !text_field.trim().is_empty() {
+        writeln!(
+            output,
+            "Dialogue: 0,{},{},{},{},0,0,0,,{}",
+            format_ass_time(line.start_ms),
+            format_ass_time(line.end_ms),
+            style,
+            actor.trim(),
+            text_field
+        )?;
+    }
+    Ok(())
+}
+
+/// 辅助函数，构建带 `\k` 标签的文本
+fn build_karaoke_text(words: &[Word]) -> Result<String, ConvertError> {
+    let syllables: Vec<_> = words.iter().flat_map(|w| &w.syllables).collect();
     if syllables.is_empty() {
         return Ok(String::new());
     }
 
     let mut text_builder = String::new();
-    let mut previous_syllable_end_ms = if is_background {
-        line.background_section
-            .as_ref()
-            .map_or(line.start_ms, |bg| bg.start_ms)
-    } else {
-        line.start_ms
-    };
+    let mut previous_syllable_end_ms = syllables.first().map_or(0, |s| s.start_ms);
 
     for syl in syllables {
         // 计算音节间的间隙
@@ -221,55 +241,4 @@ fn build_karaoke_text(line: &LyricLine, is_background: bool) -> Result<String, C
     }
 
     Ok(text_builder.trim_end().to_string())
-}
-
-/// 辅助函数，写入翻译和罗马音的 Dialogue 行。
-fn write_auxiliary_lines(
-    ass_content: &mut String,
-    start_ms: u64,
-    end_ms: u64,
-    translations: &[TranslationEntry],
-    romanizations: &[RomanizationEntry],
-    is_background: bool,
-) -> Result<(), ConvertError> {
-    let trans_style = if is_background { "bg-ts" } else { "ts" };
-    let roma_style = if is_background { "bg-roma" } else { "roma" };
-
-    for entry in translations {
-        if !entry.text.trim().is_empty() {
-            let actor = entry
-                .lang
-                .as_ref()
-                .map_or(String::new(), |l| format!("x-lang:{l}"));
-            writeln!(
-                ass_content,
-                "Dialogue: 0,{},{},{},{},0,0,0,,{}",
-                format_ass_time(start_ms),
-                format_ass_time(end_ms),
-                trans_style,
-                actor,
-                entry.text
-            )?;
-        }
-    }
-
-    for entry in romanizations {
-        if !entry.text.trim().is_empty() {
-            let actor = entry
-                .lang
-                .as_ref()
-                .map_or(String::new(), |l| format!("x-lang:{l}"));
-            writeln!(
-                ass_content,
-                "Dialogue: 0,{},{},{},{},0,0,0,,{}",
-                format_ass_time(start_ms),
-                format_ass_time(end_ms),
-                roma_style,
-                actor,
-                entry.text
-            )?;
-        }
-    }
-
-    Ok(())
 }

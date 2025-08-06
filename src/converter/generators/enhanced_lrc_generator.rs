@@ -3,10 +3,12 @@
 use tracing::warn;
 
 use crate::converter::{
-    LyricSyllable,
     generators::lrc_generator::format_lrc_time_ms,
     processors::metadata_processor::MetadataStore,
-    types::{ConvertError, LrcGenerationOptions, LrcSubLinesOutputMode, LyricLine},
+    types::{
+        ContentType, ConvertError, LrcGenerationOptions, LrcSubLinesOutputMode, LyricLine,
+        LyricSyllable,
+    },
 };
 
 /// 增强型 LRC 生成的主入口函数。
@@ -19,31 +21,69 @@ pub fn generate_enhanced_lrc(
     let mut lyric_lines = Vec::new();
 
     for line in lines {
-        if line.main_syllables.is_empty() {
-            if let Some(text) = &line.line_text
-                && !text.trim().is_empty()
-            {
-                lyric_lines.push(format!("{}{}", format_lrc_time_ms(line.start_ms), text));
+        if let Some(main_track) = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Main)
+        {
+            let syllables: Vec<_> = main_track
+                .content
+                .words
+                .iter()
+                .flat_map(|w| &w.syllables)
+                .collect();
+
+            if syllables.is_empty() {
+                continue;
             }
-        } else {
-            lyric_lines.push(build_enhanced_lrc_line(
-                &line.main_syllables,
-                line.start_ms,
-                line.end_ms,
-            ));
+
+            if syllables.len() == 1 && syllables[0].end_ms <= syllables[0].start_ms {
+                lyric_lines.push(format!(
+                    "{}{}",
+                    format_lrc_time_ms(line.start_ms),
+                    syllables[0].text
+                ));
+            } else {
+                lyric_lines.push(build_enhanced_lrc_line(
+                    &syllables.into_iter().cloned().collect::<Vec<_>>(),
+                    line.start_ms,
+                    line.end_ms,
+                ));
+            }
         }
 
-        if let Some(bg_section) = &line.background_section {
+        if let Some(bg_track) = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Background)
+        {
             match options.sub_lines_output_mode {
                 LrcSubLinesOutputMode::Ignore => {
                     // 不做任何事
                 }
                 LrcSubLinesOutputMode::SeparateLines => {
-                    if !bg_section.syllables.is_empty() {
+                    let syllables: Vec<_> = bg_track
+                        .content
+                        .words
+                        .iter()
+                        .flat_map(|w| &w.syllables)
+                        .cloned()
+                        .collect();
+                    if !syllables.is_empty() {
+                        let bg_start_ms = syllables
+                            .iter()
+                            .map(|s| s.start_ms)
+                            .min()
+                            .unwrap_or(line.start_ms);
+                        let bg_end_ms = syllables
+                            .iter()
+                            .map(|s| s.end_ms)
+                            .max()
+                            .unwrap_or(line.end_ms);
                         lyric_lines.push(build_enhanced_lrc_line(
-                            &bg_section.syllables,
-                            bg_section.start_ms,
-                            bg_section.end_ms,
+                            &syllables,
+                            bg_start_ms,
+                            bg_end_ms,
                         ));
                     }
                 }

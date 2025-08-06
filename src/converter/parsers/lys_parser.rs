@@ -2,16 +2,15 @@
 
 use std::collections::HashMap;
 
-use regex::Regex;
-use std::sync::LazyLock;
-
 use crate::converter::{
     types::{
-        BackgroundSection, ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData,
-        lys_properties,
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
+        LyricTrack, ParsedSourceData, Word, lys_properties,
     },
     utils::{parse_and_store_metadata, process_syllable_text},
 };
+use regex::Regex;
+use std::sync::LazyLock;
 
 // 匹配 LYS 行首的属性标签，如 `[4]`
 static LYS_PROPERTY_REGEX: LazyLock<Regex> =
@@ -27,7 +26,7 @@ fn parse_lys_line(line_str: &str, line_num: usize) -> Result<(u8, LyricLine), Co
     let property_cap = LYS_PROPERTY_REGEX.captures(line_str).ok_or_else(|| {
         ConvertError::InvalidLyricFormat(format!("第 {line_num} 行: 行首缺少属性标签 `[数字]`。"))
     })?;
-    let property: u8 = property_cap[1].parse().map_err(ConvertError::ParseInt)?;
+    let property: u8 = property_cap[1].parse()?;
 
     // unwrap 是安全的，因为 property_cap 在前面已确认存在
     let content_after_property = &line_str[property_cap.get(0).unwrap().end()..];
@@ -40,15 +39,13 @@ fn parse_lys_line(line_str: &str, line_num: usize) -> Result<(u8, LyricLine), Co
     for ts_cap in LYS_TIMESTAMP_REGEX.captures_iter(content_after_property) {
         // unwrap 是安全的，因为 captures_iter 只会返回成功的匹配。
         let full_match = ts_cap.get(0).unwrap();
-
         let raw_text_slice = &content_after_property[last_match_end..full_match.start()];
 
         if let Some((clean_text, ends_with_space)) =
             process_syllable_text(raw_text_slice, &mut syllables)
         {
-            let start_ms: u64 = ts_cap["start"].parse().map_err(ConvertError::ParseInt)?;
-            let duration_ms: u64 = ts_cap["duration"].parse().map_err(ConvertError::ParseInt)?;
-
+            let start_ms: u64 = ts_cap["start"].parse()?;
+            let duration_ms: u64 = ts_cap["duration"].parse()?;
             let end_ms = start_ms + duration_ms;
 
             syllables.push(LyricSyllable {
@@ -70,18 +67,21 @@ fn parse_lys_line(line_str: &str, line_num: usize) -> Result<(u8, LyricLine), Co
         )));
     }
 
-    let line_text = syllables
-        .iter()
-        .map(|s| {
-            if s.ends_with_space {
-                format!("{} ", s.text)
-            } else {
-                s.text.clone()
-            }
-        })
-        .collect::<String>()
-        .trim_end()
-        .to_string();
+    let words = vec![Word {
+        syllables,
+        ..Default::default()
+    }];
+
+    let content_track = LyricTrack {
+        words,
+        ..Default::default()
+    };
+
+    let annotated_track = AnnotatedTrack {
+        content_type: ContentType::Main,
+        content: content_track,
+        ..Default::default()
+    };
 
     let line = LyricLine {
         start_ms: if min_start_ms == u64::MAX {
@@ -90,8 +90,7 @@ fn parse_lys_line(line_str: &str, line_num: usize) -> Result<(u8, LyricLine), Co
             min_start_ms
         },
         end_ms: max_end_ms,
-        line_text: Some(line_text),
-        main_syllables: syllables,
+        tracks: vec![annotated_track],
         ..Default::default()
     };
     Ok((property, line))
@@ -125,13 +124,16 @@ pub fn parse_lys(content: &str) -> Result<ParsedSourceData, ConvertError> {
 
                 if is_background {
                     if let Some(main_line) = lines.last_mut() {
-                        if main_line.background_section.is_none() {
-                            main_line.background_section = Some(BackgroundSection {
-                                start_ms: parsed_line.start_ms,
-                                end_ms: parsed_line.end_ms,
-                                syllables: parsed_line.main_syllables,
-                                ..Default::default()
-                            });
+                        let main_line_has_bg = main_line
+                            .tracks
+                            .iter()
+                            .any(|at| at.content_type == ContentType::Background);
+
+                        if !main_line_has_bg {
+                            if let Some(mut bg_track) = parsed_line.tracks.pop() {
+                                bg_track.content_type = ContentType::Background;
+                                main_line.tracks.push(bg_track);
+                            }
                         } else {
                             // 如果主歌词行已有背景，则提升为新的主歌词行
                             warnings.push(format!(
@@ -148,7 +150,6 @@ pub fn parse_lys(content: &str) -> Result<ParsedSourceData, ConvertError> {
                         lines.push(parsed_line);
                     }
                 } else {
-                    // 这是主歌词行
                     let agent = match property {
                         lys_properties::UNSET_RIGHT | lys_properties::MAIN_RIGHT => {
                             Some("v2".to_string())
@@ -227,21 +228,21 @@ mod tests {
         assert_eq!(line1.start_ms, 100);
         assert_eq!(line1.end_ms, 600);
         assert_eq!(line1.agent, Some("v1".to_string()));
-        assert_eq!(line1.main_syllables.len(), 2);
-
+        let main_track1 = &line1.tracks[0].content;
+        assert_eq!(main_track1.words.len(), 1);
+        assert_eq!(main_track1.words[0].syllables.len(), 2);
         assert_eq!(
-            line1.main_syllables[0],
+            main_track1.words[0].syllables[0],
             new_syllable("Hello", 100, 300, true)
         );
         assert_eq!(
-            line1.main_syllables[1],
+            main_track1.words[0].syllables[1],
             new_syllable("world", 300, 600, false)
         );
 
         let line2 = &result.lines[1];
         assert_eq!(line2.start_ms, 1000);
         assert_eq!(line2.agent, Some("v2".to_string()));
-        assert_eq!(line2.main_syllables.len(), 2);
     }
 
     #[test]
@@ -251,15 +252,15 @@ mod tests {
 
         assert_eq!(result.lines.len(), 1);
         let line = &result.lines[0];
+        assert_eq!(line.tracks.len(), 2);
 
-        assert!(!line.main_syllables.is_empty());
-        assert_eq!(line.main_syllables[0].text, "Main");
-
-        assert!(line.background_section.is_some());
-        let bg_section = line.background_section.as_ref().unwrap();
-        assert_eq!(bg_section.start_ms, 500);
-        assert_eq!(bg_section.syllables.len(), 1);
-        assert_eq!(bg_section.syllables[0].text, "(Background)");
+        let bg_track = line
+            .tracks
+            .iter()
+            .find(|at| at.content_type == ContentType::Background)
+            .unwrap();
+        assert_eq!(bg_track.content.words[0].syllables[0].text, "(Background)");
+        assert_eq!(bg_track.content.words[0].syllables[0].start_ms, 500);
     }
 
     #[test]
@@ -273,17 +274,16 @@ mod tests {
 
         let line1 = &result.lines[0];
         assert_eq!(line1.agent, Some("v1".to_string()));
-        assert_eq!(line1.main_syllables[0].text, "Main");
-        assert!(line1.background_section.is_some());
-        assert_eq!(
-            line1.background_section.as_ref().unwrap().syllables[0].text,
-            "(BG 1)"
-        );
+        assert_eq!(line1.tracks.len(), 2);
+        assert_eq!(line1.tracks[0].content_type, ContentType::Main);
+        assert_eq!(line1.tracks[1].content_type, ContentType::Background);
+        assert_eq!(line1.tracks[1].content.words[0].syllables[0].text, "(BG 1)");
 
         let line2 = &result.lines[1];
         assert_eq!(line2.agent, Some("v1".to_string()));
-        assert_eq!(line2.main_syllables[0].text, "(BG 2)");
-        assert!(line2.background_section.is_none());
+        assert_eq!(line2.tracks.len(), 1);
+        assert_eq!(line2.tracks[0].content_type, ContentType::Main);
+        assert_eq!(line2.tracks[0].content.words[0].syllables[0].text, "(BG 2)");
     }
 
     #[test]
@@ -297,7 +297,11 @@ mod tests {
 
         let line = &result.lines[0];
         assert_eq!(line.agent, Some("v1".to_string()));
-        assert_eq!(line.main_syllables[0].text, "(Orphan BG)");
+        assert_eq!(
+            line.tracks[0].content.words[0].syllables[0].text,
+            "(Orphan BG)"
+        );
+        assert_eq!(line.tracks[0].content_type, ContentType::Main);
     }
 
     #[test]
@@ -307,9 +311,15 @@ mod tests {
 
         assert_eq!(result.lines.len(), 2);
         assert_eq!(result.lines[0].start_ms, 100);
-        assert_eq!(result.lines[0].main_syllables[0].text, "First line");
+        assert_eq!(
+            result.lines[0].tracks[0].content.words[0].syllables[0].text,
+            "First line"
+        );
         assert_eq!(result.lines[1].start_ms, 1000);
-        assert_eq!(result.lines[1].main_syllables[0].text, "Second line");
+        assert_eq!(
+            result.lines[1].tracks[0].content.words[0].syllables[0].text,
+            "Second line"
+        );
     }
 
     #[test]
@@ -319,7 +329,7 @@ mod tests {
 
         assert_eq!(result.lines.len(), 1);
         assert_eq!(
-            result.lines[0].main_syllables[0].text,
+            result.lines[0].tracks[0].content.words[0].syllables[0].text,
             "This is a valid line"
         );
 
@@ -346,14 +356,13 @@ mod tests {
 
         assert_eq!(result.lines.len(), 1);
         let line = &result.lines[0];
-        assert_eq!(line.main_syllables.len(), 2);
+        let syllables = &line.tracks[0].content.words[0].syllables;
+        assert_eq!(syllables.len(), 2);
 
-        let syl1 = &line.main_syllables[0];
-        assert_eq!(syl1.text, "Word1");
-        assert!(syl1.ends_with_space);
+        assert_eq!(syllables[0].text, "Word1");
+        assert!(syllables[0].ends_with_space);
 
-        let syl2 = &line.main_syllables[1];
-        assert_eq!(syl2.text, "Word2");
-        assert!(!syl2.ends_with_space);
+        assert_eq!(syllables[1].text, "Word2");
+        assert!(!syllables[1].ends_with_space);
     }
 }

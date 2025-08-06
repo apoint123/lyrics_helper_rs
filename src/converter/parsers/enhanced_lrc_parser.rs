@@ -11,8 +11,11 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use crate::converter::{
-    types::{ConvertError, LyricLine, LyricSyllable, ParsedSourceData},
-    utils::parse_and_store_metadata,
+    types::{
+        AnnotatedTrack, ContentType, ConvertError, LyricLine, LyricSyllable, LyricTrack,
+        ParsedSourceData, Word,
+    },
+    utils::{normalize_text_whitespace, parse_and_store_metadata},
 };
 
 /// 用于匹配行时间标签，例如 [00:12.34]
@@ -37,13 +40,13 @@ pub fn parse_enhanced_lrc(content: &str) -> Result<ParsedSourceData, ConvertErro
         let line_num_one_based = line_num + 1;
         let line_str_trimmed = line_str.trim();
 
-        if line_str_trimmed.is_empty() {
+        if line_str_trimmed.is_empty()
+            || parse_and_store_metadata(line_str_trimmed, &mut raw_metadata)
+        {
             continue;
         }
 
-        if parse_and_store_metadata(line_str_trimmed, &mut raw_metadata) {
-            continue;
-        } else if let Some(line_time_match) = LINE_TIME_RE.find(line_str_trimmed) {
+        if let Some(line_time_match) = LINE_TIME_RE.find(line_str_trimmed) {
             let line_start_ms = match parse_lrc_time_tag(line_time_match.as_str()) {
                 Ok(Some(time)) => time,
                 _ => {
@@ -55,7 +58,6 @@ pub fn parse_enhanced_lrc(content: &str) -> Result<ParsedSourceData, ConvertErro
             };
 
             let line_content = &line_str_trimmed[line_time_match.end()..];
-
             let syllables = parse_syllables_from_line(
                 line_content,
                 line_start_ms,
@@ -63,45 +65,50 @@ pub fn parse_enhanced_lrc(content: &str) -> Result<ParsedSourceData, ConvertErro
                 line_num_one_based,
             );
 
-            if !syllables.is_empty() {
+            let lyric_line = if !syllables.is_empty() {
                 // 如果行开始时间与第一个词的开始时间不同，使用第一个词的开始时间
                 let final_line_start_ms = syllables.first().map_or(line_start_ms, |s| s.start_ms);
-
-                let line_text = syllables
-                    .iter()
-                    .map(|s| {
-                        if s.ends_with_space {
-                            format!("{} ", s.text)
-                        } else {
-                            s.text.clone()
-                        }
-                    })
-                    .collect::<String>();
-
-                lines.push(LyricLine {
+                let main_track = LyricTrack {
+                    words: vec![Word {
+                        syllables,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                };
+                LyricLine {
                     start_ms: final_line_start_ms,
-                    end_ms: 0, // 在第二遍处理中填充
-                    line_text: Some(line_text),
-                    main_syllables: syllables,
+                    tracks: vec![AnnotatedTrack {
+                        content_type: ContentType::Main,
+                        content: main_track,
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                });
+                }
             } else if !line_content.trim().is_empty() {
-                // 如果行内没有逐字时间戳，则作为普通LRC行处理
-                lines.push(LyricLine {
-                    start_ms: line_start_ms,
-                    end_ms: 0,
-                    line_text: Some(crate::converter::utils::normalize_text_whitespace(
-                        line_content,
-                    )),
+                let main_track = LyricTrack {
+                    words: vec![Word {
+                        syllables: vec![LyricSyllable {
+                            text: normalize_text_whitespace(line_content),
+                            start_ms: line_start_ms,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                });
-            }
-        } else {
-            warnings.push(format!(
-                "第 {} 行: 无法识别的行格式，已忽略: '{}'",
-                line_num_one_based,
-                line_str_trimmed.chars().take(50).collect::<String>()
-            ));
+                };
+                LyricLine {
+                    start_ms: line_start_ms,
+                    tracks: vec![AnnotatedTrack {
+                        content_type: ContentType::Main,
+                        content: main_track,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+            } else {
+                continue;
+            };
+            lines.push(lyric_line);
         }
     }
 
@@ -139,12 +146,12 @@ fn parse_syllables_from_line(
         return Vec::new();
     }
 
-    if let Some((first_word_time, _)) = time_tags.first()
-        && line_start_ms != *first_word_time
-    {
-        warnings.push(format!(
+    if let Some((first_word_time, _)) = time_tags.first() {
+        if line_start_ms != *first_word_time {
+            warnings.push(format!(
                 "第 {line_num} 行: 行时间戳 [{line_start_ms}] 与第一个音节时间戳 <{first_word_time}> 不匹配，已以后者为准。"
             ));
+        }
     }
 
     let mut syllables = Vec::new();
@@ -188,58 +195,38 @@ fn parse_syllables_from_line(
             });
         }
     }
-
     syllables
 }
 
 /// 第二遍处理，修正所有行和音节的结束时间
-fn finalize_end_times(lines: &mut [LyricLine], warnings: &mut Vec<String>) {
+fn finalize_end_times(lines: &mut [LyricLine], _warnings: &mut Vec<String>) {
     // 首先按开始时间排序，确保时间线是正确的
     lines.sort_by_key(|line| line.start_ms);
+    for i in 0..lines.len() {
+        let next_line_start_ms = lines.get(i + 1).map(|l| l.start_ms);
+        let current_line = &mut lines[i];
 
-    let num_lines = lines.len();
-    for i in 0..num_lines {
-        let next_line_start_ms = if i + 1 < num_lines {
-            Some(lines[i + 1].start_ms)
-        } else {
-            None
-        };
-
-        let current_line_start_ms = lines[i].start_ms;
-
-        if let Some(last_syllable) = lines[i].main_syllables.last_mut() {
-            // 如果最后一个音节的结束时间是待定的 (0)
-            if last_syllable.end_ms == 0 {
-                let mut end_ms = next_line_start_ms
-                    .unwrap_or_else(|| last_syllable.start_ms + DEFAULT_LINE_DURATION_MS);
-
-                if end_ms <= last_syllable.start_ms {
-                    warnings.push(format!(
-                        "行 ( {current_line_start_ms}ms): 最后一个音节的结束时间（由下一行决定）早于或等于其开始时间。结束时间已被修正。"
-                    ));
-                    end_ms = last_syllable.start_ms + 1000;
+        if let Some(main_track) = current_line
+            .tracks
+            .iter_mut()
+            .find(|t| t.content_type == ContentType::Main)
+        {
+            if let Some(word) = main_track.content.words.first_mut() {
+                if let Some(last_syllable) = word.syllables.last_mut() {
+                    if last_syllable.end_ms == 0 {
+                        let end_ms = next_line_start_ms
+                            .unwrap_or_else(|| last_syllable.start_ms + DEFAULT_LINE_DURATION_MS);
+                        last_syllable.end_ms = end_ms.max(last_syllable.start_ms);
+                        last_syllable.duration_ms =
+                            Some(last_syllable.end_ms.saturating_sub(last_syllable.start_ms));
+                    }
+                    current_line.end_ms = last_syllable.end_ms;
+                } else {
+                    current_line.end_ms = next_line_start_ms
+                        .unwrap_or_else(|| current_line.start_ms + DEFAULT_LINE_DURATION_MS)
+                        .max(current_line.start_ms);
                 }
-
-                last_syllable.end_ms = end_ms;
-                last_syllable.duration_ms = Some(end_ms.saturating_sub(last_syllable.start_ms));
             }
-            lines[i].end_ms = last_syllable.end_ms;
-        } else if lines[i].line_text.is_some() {
-            let mut end_ms = next_line_start_ms
-                .unwrap_or_else(|| current_line_start_ms + DEFAULT_LINE_DURATION_MS);
-
-            if end_ms <= current_line_start_ms {
-                end_ms = current_line_start_ms + 1000;
-            }
-            lines[i].end_ms = end_ms;
-        }
-
-        if next_line_start_ms.is_none() && num_lines > 0 {
-            warnings.push(format!(
-                "第 {} 行 ( {}ms): 作为最后一行，其结束时间是估算值。",
-                i + 1,
-                current_line_start_ms
-            ));
         }
     }
 }
@@ -264,11 +251,39 @@ pub fn parse_lrc_time_tag(tag_str: &str) -> Result<Option<u64>, ConvertError> {
         if fraction_str.len() == 2 {
             fraction *= 10;
         }
-
-        let total_ms = minutes * 60 * 1000 + seconds * 1000 + fraction;
-        Ok(Some(total_ms))
+        Ok(Some(minutes * 60 * 1000 + seconds * 1000 + fraction))
     } else {
         // 如果正则表达式不匹配，则这不是一个有效的时间标签
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_enhanced_lrc_parsing() {
+        let content =
+            "[00:10.00]<00:10.00>Hello <00:10.50>world\n[00:12.50]<00:12.50>Next <00:13.00>line";
+        let data = parse_enhanced_lrc(content).unwrap();
+        assert_eq!(data.lines.len(), 2);
+
+        let line1 = &data.lines[0];
+        assert_eq!(line1.start_ms, 10000);
+
+        let main_track = &line1.tracks[0];
+        let syls1: Vec<_> = main_track
+            .content
+            .words
+            .iter()
+            .flat_map(|w| &w.syllables)
+            .collect();
+        assert_eq!(syls1.len(), 2);
+        assert_eq!(syls1[0].text, "Hello");
+        assert_eq!(syls1[0].start_ms, 10000);
+        assert_eq!(syls1[1].text, "world");
+        assert_eq!(syls1[1].start_ms, 10500);
+        assert_eq!(line1.end_ms, 12500);
     }
 }

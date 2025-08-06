@@ -1,13 +1,18 @@
 //! ASS 格式解析器
+//!
+//! 此解析器强依赖于字幕行在文件中的物理顺序，若顺序错误，可能会导致辅助行关联错误。
 
 use std::collections::HashMap;
 
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::converter::types::{
-    BackgroundSection, ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData,
-    RomanizationEntry, TranslationEntry,
+use crate::converter::{
+    TrackMetadataKey, Word,
+    types::{
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
+        LyricTrack, ParsedSourceData,
+    },
 };
 
 /// 用于解析ASS时间戳字符串 (H:MM:SS.CS)
@@ -267,16 +272,19 @@ fn parse_actor(
 /// 解析ASS格式内容到 `ParsedSourceData` 结构。
 pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
     // 确定是逐字模式还是逐行模式
-    let has_karaoke_tags = content.contains("{\\k");
+    let has_karaoke_tags = content.contains(r"{\k");
 
-    let mut final_lines: Vec<LyricLine> = Vec::new();
     let mut raw_metadata: HashMap<String, Vec<String>> = HashMap::new();
     let mut warnings: Vec<String> = Vec::new();
+
+    let mut new_lines_internal: Vec<LyricLine> = Vec::new();
+    let mut current_line: Option<LyricLine> = None;
 
     let mut in_events_section = false;
     let mut subtitle_line_num = 0;
 
     for line_str_raw in content.lines() {
+        subtitle_line_num += 1;
         let line_str = line_str_raw.trim();
 
         // 寻找并进入 [Events] 区域
@@ -291,25 +299,15 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
             continue;
         }
 
-        subtitle_line_num += 1;
-
-        if !line_str.starts_with("Dialogue:") && !line_str.starts_with("Comment:") {
-            warnings.push(format!(
-                "第 {subtitle_line_num} 行: 无法识别的行类型，已跳过。预期为 'Dialogue:' 或 'Comment:'，实际为: \"{}\"",
-                line_str.chars().take(40).collect::<String>()
-            ));
-            continue;
-        }
-
         if let Some(caps) = ASS_LINE_REGEX.captures(line_str) {
             let line_type = &caps["Type"];
-            let start_ms = parse_ass_time(&caps["Start"], subtitle_line_num)?;
-            let end_ms = parse_ass_time(&caps["End"], subtitle_line_num)?;
             let style = &caps["Style"];
-            let actor_raw = &caps["Actor"];
             let text_content = &caps["Text"];
 
-            // 元数据行
+            if text_content.is_empty() {
+                continue;
+            }
+
             if style == "meta" && line_type == "Comment" {
                 if let Some((key, value)) = text_content.split_once(':') {
                     raw_metadata
@@ -324,127 +322,162 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
                 continue;
             }
 
+            let start_ms = parse_ass_time(&caps["Start"], subtitle_line_num)?;
+            let actor_raw = &caps["Actor"];
             let actor_info = parse_actor(actor_raw, style, subtitle_line_num, &mut warnings)?;
 
-            match style {
-                "orig" | "default" => {
-                    let mut new_line = LyricLine {
-                        start_ms,
-                        end_ms,
-                        ..Default::default()
-                    };
+            let style_lower = style.to_lowercase();
 
-                    if has_karaoke_tags {
-                        let (syllables, calculated_end_ms) =
-                            parse_karaoke_text(text_content, start_ms, subtitle_line_num)?;
-                        if syllables.is_empty() {
-                            warnings.push(format!(
-                                "第 {subtitle_line_num} 行: 样式为 '{style}' 的歌词行未产生任何音节。"
-                            ));
-                            // 即使没音节，也创建一个空行占位，以便后续翻译能附加上去
-                        }
-                        new_line.end_ms = new_line.end_ms.max(calculated_end_ms);
-                        if actor_info.is_background {
-                            new_line.background_section = Some(BackgroundSection {
-                                start_ms,
-                                end_ms: calculated_end_ms,
-                                syllables,
-                                ..Default::default()
-                            });
-                        } else {
-                            new_line.main_syllables = syllables;
-                        }
-                    } else {
-                        // 逐行模式
-                        new_line.end_ms = new_line.end_ms.max(end_ms);
-                        new_line.line_text = Some(text_content.to_string());
-                    }
-
-                    if !actor_info.is_background {
-                        new_line.agent = actor_info.agent;
-                        new_line.song_part = actor_info.song_part;
-                    }
-
-                    final_lines.push(new_line);
+            // 主歌词行: 开启一个新的 LyricLine
+            if style_lower == "orig" || style_lower == "default" {
+                if let Some(completed_line) = current_line.take() {
+                    new_lines_internal.push(completed_line);
                 }
-                "ts" | "trans" | "bg-ts" | "roma" | "bg-roma" => {
-                    if let Some(last_line) = final_lines.last_mut() {
-                        let is_bg_style = style.starts_with("bg-");
 
-                        match style {
-                            "ts" | "trans" | "bg-ts" => {
-                                let entry = TranslationEntry {
+                let (syllables, calculated_end_ms) =
+                    parse_karaoke_text(text_content, start_ms, subtitle_line_num)?;
+
+                let content_type = if actor_info.is_background {
+                    ContentType::Background
+                } else {
+                    ContentType::Main
+                };
+
+                let words = if syllables.is_empty() && !has_karaoke_tags {
+                    // 对于逐行歌词，即使没有音节，也创建一个包含整行文本的Word
+                    vec![Word {
+                        syllables: vec![LyricSyllable {
+                            text: text_content.to_string(),
+                            start_ms,
+                            end_ms: start_ms,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }]
+                } else if syllables.is_empty() {
+                    vec![]
+                } else {
+                    vec![Word {
+                        syllables,
+                        furigana: None,
+                    }]
+                };
+
+                let content_track = LyricTrack {
+                    words,
+                    metadata: Default::default(),
+                };
+
+                let annotated_track = AnnotatedTrack {
+                    content_type,
+                    content: content_track,
+                    translations: vec![],
+                    romanizations: vec![],
+                };
+
+                let mut new_line = LyricLine {
+                    start_ms,
+                    end_ms: calculated_end_ms,
+                    agent: if actor_info.is_background {
+                        None
+                    } else {
+                        actor_info.agent
+                    },
+                    song_part: if actor_info.is_background {
+                        None
+                    } else {
+                        actor_info.song_part
+                    },
+                    tracks: vec![annotated_track],
+                };
+
+                // 对于逐行歌词，使用 dialogue 的结束时间
+                if !has_karaoke_tags {
+                    let end_ms = parse_ass_time(&caps["End"], subtitle_line_num)?;
+                    new_line.end_ms = new_line.end_ms.max(end_ms);
+                }
+
+                current_line = Some(new_line);
+
+            // 辅助行: 附加到当前的 LyricLine
+            } else if ["ts", "trans", "roma"]
+                .iter()
+                .any(|&s| style_lower.contains(s))
+            {
+                if let Some(line) = current_line.as_mut() {
+                    if let Some(main_annotated_track) = line.tracks.first_mut() {
+                        let (syllables, calculated_end_ms) =
+                            parse_karaoke_text(text_content, line.start_ms, subtitle_line_num)?;
+
+                        let is_romanization = style_lower.contains("roma");
+
+                        let words = if syllables.is_empty() && !has_karaoke_tags {
+                            vec![Word {
+                                syllables: vec![LyricSyllable {
                                     text: text_content.to_string(),
-                                    lang: actor_info.lang_code,
-                                };
-                                if is_bg_style {
-                                    let bg = last_line
-                                        .background_section
-                                        .get_or_insert_with(Default::default);
-                                    bg.translations.push(entry);
-                                    bg.end_ms = bg.end_ms.max(end_ms);
-                                } else {
-                                    last_line.translations.push(entry);
-                                    last_line.end_ms = last_line.end_ms.max(end_ms);
-                                }
-                            }
-                            "roma" | "bg-roma" => {
-                                let entry = RomanizationEntry {
-                                    text: text_content.to_string(),
-                                    lang: actor_info.lang_code,
-                                    scheme: None,
-                                };
-                                if is_bg_style {
-                                    let bg = last_line
-                                        .background_section
-                                        .get_or_insert_with(Default::default);
-                                    bg.romanizations.push(entry);
-                                    bg.end_ms = bg.end_ms.max(end_ms);
-                                } else {
-                                    last_line.romanizations.push(entry);
-                                    last_line.end_ms = last_line.end_ms.max(end_ms);
-                                }
-                            }
-                            _ => unreachable!(), // 已经被外层 match 覆盖
+                                    start_ms,
+                                    end_ms: start_ms,
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            }]
+                        } else if syllables.is_empty() {
+                            vec![]
+                        } else {
+                            vec![Word {
+                                syllables,
+                                furigana: None,
+                            }]
+                        };
+
+                        let mut metadata = HashMap::new();
+                        if let Some(lang) = actor_info.lang_code {
+                            metadata.insert(TrackMetadataKey::Language, lang);
+                        }
+
+                        let aux_track = LyricTrack { words, metadata };
+
+                        if is_romanization {
+                            main_annotated_track.romanizations.push(aux_track);
+                        } else {
+                            main_annotated_track.translations.push(aux_track);
+                        }
+                        line.end_ms = line.end_ms.max(calculated_end_ms);
+
+                        // 对于逐行歌词，使用 dialogue 的结束时间
+                        if !has_karaoke_tags {
+                            let end_ms = parse_ass_time(&caps["End"], subtitle_line_num)?;
+                            line.end_ms = line.end_ms.max(end_ms);
                         }
                     } else {
                         warnings.push(format!(
-                            "第 {subtitle_line_num} 行: 找到了一个翻译/音译行，但它前面没有任何主歌词行可以附加，已忽略。"
+                            "第 {subtitle_line_num} 行: 找到了一个辅助行，但当前主歌词行没有内容轨道可以附加，已忽略。"
                         ));
                     }
-                }
-                _ => {
+                } else {
                     warnings.push(format!(
-                        "第 {subtitle_line_num} 行: 样式 '{style}' 不受支持，已被忽略。"
+                        "第 {subtitle_line_num} 行: 找到了一个翻译/音译行，但它前面没有任何主歌词行可以附加，已忽略。"
                     ));
                 }
+            } else {
+                warnings.push(format!(
+                    "第 {subtitle_line_num} 行: 样式 '{style}' 不受支持，已被忽略。"
+                ));
             }
         } else {
-            // 这意味着行以 "Dialogue:" 或 "Comment:" 开头，但格式不匹配正则表达式
             warnings.push(format!(
-                "第 {subtitle_line_num} 行: 格式与预期的 ASS 事件格式不匹配，已跳过。行内容: \"{line_str}\""
+                "第 {subtitle_line_num} 行: 格式与预期的 ASS 事件格式不匹配，已跳过。"
             ));
         }
     }
 
-    for line in &mut final_lines {
-        if !line.main_syllables.is_empty() && line.line_text.is_none() {
-            let mut assembled_text = String::new();
-            for (i, syl) in line.main_syllables.iter().enumerate() {
-                assembled_text.push_str(&syl.text);
-                if syl.ends_with_space && i < line.main_syllables.len() - 1 {
-                    assembled_text.push(' ');
-                }
-            }
-            line.line_text = Some(assembled_text);
-        }
+    // 不要忘记保存最后正在处理的行
+    if let Some(completed_line) = current_line.take() {
+        new_lines_internal.push(completed_line);
     }
 
-    // 按开始时间对所有行进行排序
-    final_lines.sort_by_key(|l| l.start_ms);
-
     Ok(ParsedSourceData {
-        lines: final_lines,
+        lines: new_lines_internal,
         raw_metadata,
         warnings,
         source_format: LyricFormat::Ass,

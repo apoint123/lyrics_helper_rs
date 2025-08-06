@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::converter::{
     processors::metadata_processor::MetadataStore,
-    types::{ConvertError, LyricLine, LyricSyllable, lys_properties},
+    types::{ContentType, ConvertError, LyricLine, Word, lys_properties},
 };
 
 /// LYS 生成的主入口函数。
@@ -17,65 +17,70 @@ pub fn generate_lys(
     writeln!(lys_output, "{}", metadata_store.generate_lrc_header())?;
 
     for line in lines {
-        if !line.main_syllables.is_empty() {
-            let property = match line.agent.as_deref() {
-                // 如果 agent 是 "v2"，视为右。
-                Some("v2") => lys_properties::MAIN_RIGHT,
-                // 其他任何情况，都默认视为左。
-                Some(_) | None => lys_properties::MAIN_LEFT,
-            };
-            write!(lys_output, "[{property}]")?;
-
-            write_syllables_to_string(&mut lys_output, &line.main_syllables, false)?;
-            writeln!(lys_output)?;
+        // 主歌词行
+        if let Some(main_track) = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Main)
+        {
+            if !main_track.content.words.is_empty() {
+                let property = match line.agent.as_deref() {
+                    Some("v2") => lys_properties::MAIN_RIGHT,
+                    _ => lys_properties::MAIN_LEFT,
+                };
+                write!(lys_output, "[{property}]")?;
+                write_words_to_lys_string(&mut lys_output, &main_track.content.words, false)?;
+                writeln!(lys_output)?;
+            }
         }
 
-        if let Some(bg_section) = &line.background_section
-            && !bg_section.syllables.is_empty()
+        // 背景人声行
+        if let Some(bg_track) = line
+            .tracks
+            .iter()
+            .find(|t| t.content_type == ContentType::Background)
         {
-            let bg_property = match line.agent.as_deref() {
-                // agent "v2" -> 右。
-                Some("v2") => lys_properties::BG_RIGHT,
-                // 其他情况 -> 左。
-                Some(_) | None => lys_properties::BG_LEFT,
-            };
-            write!(lys_output, "[{bg_property}]")?;
-
-            write_syllables_to_string(&mut lys_output, &bg_section.syllables, true)?;
-            writeln!(lys_output)?;
+            if !bg_track.content.words.is_empty() {
+                let bg_property = match line.agent.as_deref() {
+                    // agent "v2" -> 右。
+                    Some("v2") => lys_properties::BG_RIGHT,
+                    // 其他情况 -> 左。
+                    _ => lys_properties::BG_LEFT,
+                };
+                write!(lys_output, "[{bg_property}]")?;
+                write_words_to_lys_string(&mut lys_output, &bg_track.content.words, true)?;
+                writeln!(lys_output)?;
+            }
         }
     }
 
     Ok(lys_output)
 }
 
-/// 辅助函数，将音节列表 (`&[LyricSyllable]`) 格式化为 LYS 行的文本部分。
-///
-/// # 参数
-/// * `output` - 可变的字符串切片，用于写入生成的文本。
-/// * `syllables` - 要处理的音节列表。
-/// * `is_background` - 布尔值，指示这些音节是否为背景人声。
-fn write_syllables_to_string(
+fn write_words_to_lys_string(
     output: &mut String,
-    syllables: &[LyricSyllable],
+    words: &[Word],
     is_background: bool,
 ) -> Result<(), std::fmt::Error> {
+    let syllables: Vec<_> = words.iter().flat_map(|w| &w.syllables).collect();
+
     for (i, syl) in syllables.iter().enumerate() {
         let duration_ms = syl.end_ms.saturating_sub(syl.start_ms);
         let mut text_to_write = syl.text.as_str();
-
-        let modified_text_buffer;
+        let temp_buffer;
 
         if is_background {
-            if i == 0 && i == syllables.len() - 1 {
-                modified_text_buffer = format!("({text_to_write})");
-                text_to_write = &modified_text_buffer;
-            } else if i == 0 {
-                modified_text_buffer = format!("({text_to_write}");
-                text_to_write = &modified_text_buffer;
-            } else if i == syllables.len() - 1 {
-                modified_text_buffer = format!("{text_to_write})");
-                text_to_write = &modified_text_buffer;
+            let is_first = i == 0;
+            let is_last = i == syllables.len() - 1;
+            if is_first && is_last {
+                temp_buffer = format!("({text_to_write})");
+                text_to_write = &temp_buffer;
+            } else if is_first {
+                temp_buffer = format!("({text_to_write}");
+                text_to_write = &temp_buffer;
+            } else if is_last {
+                temp_buffer = format!("{text_to_write})");
+                text_to_write = &temp_buffer;
             }
         }
 

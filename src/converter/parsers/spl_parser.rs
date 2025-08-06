@@ -2,15 +2,15 @@
 
 use std::collections::HashMap;
 
-use regex::Regex;
-use std::sync::LazyLock;
-
 use crate::converter::{
     types::{
-        ConvertError, LyricFormat, LyricLine, LyricSyllable, ParsedSourceData, TranslationEntry,
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
+        LyricTrack, ParsedSourceData, Word,
     },
     utils::process_syllable_text,
 };
+use regex::Regex;
+use std::sync::LazyLock;
 
 /// 匹配并捕获一个或多个行首时间戳 `[...]`
 static SPL_LEADING_TIMESTAMPS_REGEX: LazyLock<Regex> =
@@ -37,8 +37,8 @@ fn parse_spl_timestamp_ms(ts_str: &str) -> Result<u64, ConvertError> {
             "无效的SPL时间戳格式: {ts_str}"
         )));
     }
-    let minutes: u64 = parts[0].parse().map_err(ConvertError::ParseInt)?;
-    let seconds: u64 = parts[1].parse().map_err(ConvertError::ParseInt)?;
+    let minutes: u64 = parts[0].parse()?;
+    let seconds: u64 = parts[1].parse()?;
     let fraction_str = parts[2];
 
     // 处理毫秒部分
@@ -95,13 +95,15 @@ fn parse_syllables(
 
     let raw_last_segment = &text[last_pos..];
     if let Some((clean_text, _)) = process_syllable_text(raw_last_segment, &mut syllables) {
-        syllables.push(LyricSyllable {
-            text: clean_text,
-            start_ms: current_time,
-            end_ms: line_end_ms,
-            duration_ms: Some(line_end_ms.saturating_sub(current_time)),
-            ends_with_space: false,
-        });
+        if !clean_text.is_empty() {
+            syllables.push(LyricSyllable {
+                text: clean_text,
+                start_ms: current_time,
+                end_ms: line_end_ms,
+                duration_ms: Some(line_end_ms.saturating_sub(current_time)),
+                ends_with_space: false,
+            });
+        }
     }
     Ok(syllables)
 }
@@ -121,10 +123,8 @@ pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
             continue;
         }
 
-        let mut current_block = SplBlock::default();
-
-        // 解析行首时间戳
         if let Some(caps) = SPL_LEADING_TIMESTAMPS_REGEX.captures(trimmed_line) {
+            let mut current_block = SplBlock::default();
             if let Some(timestamps_str) = caps.get(1) {
                 for ts_cap in SPL_ANY_TIMESTAMP_REGEX.captures_iter(timestamps_str.as_str()) {
                     if let Some(ts_content) = ts_cap.get(1) {
@@ -137,41 +137,37 @@ pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
             }
             let mut text_to_process = caps.get(3).map_or("", |m| m.as_str()).to_string();
 
-            // 检查并提取行尾的显式结束时间戳
             if let Some(last_ts_match) = SPL_ANY_TIMESTAMP_REGEX.find_iter(&text_to_process).last()
-                && last_ts_match.end() == text_to_process.len()
             {
-                let caps_inner = SPL_ANY_TIMESTAMP_REGEX
-                    .captures(last_ts_match.as_str())
-                    .unwrap();
-                if let Some(ts_content) = caps_inner.get(1) {
-                    // 显式结束必须是 [...]
-                    if let Ok(ms) = parse_spl_timestamp_ms(ts_content.as_str()) {
-                        current_block.explicit_end_ms = Some(ms);
-                        text_to_process.truncate(last_ts_match.start());
+                if last_ts_match.end() == text_to_process.len() {
+                    if let Some(ts_content) = SPL_ANY_TIMESTAMP_REGEX
+                        .captures(last_ts_match.as_str())
+                        .unwrap()
+                        .get(1)
+                    {
+                        if let Ok(ms) = parse_spl_timestamp_ms(ts_content.as_str()) {
+                            current_block.explicit_end_ms = Some(ms);
+                            text_to_process.truncate(last_ts_match.start());
+                        }
                     }
                 }
             }
             current_block.main_text = text_to_process.trim_end().to_string();
 
-            // 检查并关联翻译行
             while let Some(&(_, next_line_str)) = line_iterator.peek() {
                 let next_trimmed = next_line_str.trim();
                 if next_trimmed.is_empty() {
                     line_iterator.next();
                     continue;
                 }
-
-                // 检查下一行是否为同时间戳翻译
                 if let Some(next_caps) = SPL_LEADING_TIMESTAMPS_REGEX.captures(next_trimmed) {
                     let mut next_timestamps = Vec::new();
-                    if let Some(timestamps_str) = next_caps.get(1) {
-                        for ts_cap in SPL_ANY_TIMESTAMP_REGEX.captures_iter(timestamps_str.as_str())
-                        {
-                            if let Some(ts_content) = ts_cap.get(1)
-                                && let Ok(ms) = parse_spl_timestamp_ms(ts_content.as_str())
-                            {
-                                next_timestamps.push(ms);
+                    if let Some(ts_str) = next_caps.get(1) {
+                        for ts_cap in SPL_ANY_TIMESTAMP_REGEX.captures_iter(ts_str.as_str()) {
+                            if let Some(ts_content) = ts_cap.get(1) {
+                                if let Ok(ms) = parse_spl_timestamp_ms(ts_content.as_str()) {
+                                    next_timestamps.push(ms);
+                                }
                             }
                         }
                     }
@@ -199,23 +195,19 @@ pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
 
     // 将逻辑块转换为最终的 LyricLine
     for (i, block) in spl_blocks.iter().enumerate() {
-        let end_time = if let Some(explicit_end) = block.explicit_end_ms {
-            explicit_end
-        } else {
-            // 隐式结束时间是下一个块的开始时间
+        let end_time = block.explicit_end_ms.unwrap_or_else(|| {
             spl_blocks
                 .get(i + 1)
-                .and_then(|next_block| next_block.start_times.first())
+                .and_then(|b| b.start_times.first())
                 .copied()
                 .unwrap_or_else(|| block.start_times.first().unwrap_or(&0) + 5000)
-        };
-
+        });
         let syllables = parse_syllables(
             &block.main_text,
             *block.start_times.first().unwrap_or(&0),
             end_time,
         )?;
-        let is_word_timed = !syllables.is_empty() && syllables.len() > 1;
+        let is_word_timed = syllables.len() > 1;
 
         if block.start_times.len() > 1 && is_word_timed {
             warnings.push(format!(
@@ -224,52 +216,57 @@ pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
             ));
         }
 
-        // 为每个开始时间戳创建 LyricLine
         for &start_ms in &block.start_times {
-            let full_line_text = syllables
+            let main_content_track = LyricTrack {
+                words: vec![Word {
+                    syllables: syllables.clone(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+
+            let translation_tracks: Vec<LyricTrack> = block
+                .translations
                 .iter()
-                .map(|s| {
-                    if s.ends_with_space {
-                        format!("{} ", s.text)
-                    } else {
-                        s.text.clone()
-                    }
+                .map(|translation_text| LyricTrack {
+                    words: vec![Word {
+                        syllables: vec![LyricSyllable {
+                            text: translation_text.clone(),
+                            start_ms,
+                            end_ms: end_time,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    metadata: HashMap::new(),
                 })
-                .collect::<String>()
-                .trim_end()
-                .to_string();
+                .collect();
+
+            let annotated_track = AnnotatedTrack {
+                content_type: ContentType::Main,
+                content: main_content_track,
+                translations: translation_tracks,
+                romanizations: vec![],
+            };
 
             lines.push(LyricLine {
                 start_ms,
                 end_ms: end_time,
-                line_text: Some(full_line_text.clone()),
-                main_syllables: if is_word_timed {
-                    syllables.clone()
-                } else {
-                    Vec::new()
-                },
-                translations: block
-                    .translations
-                    .iter()
-                    .map(|t| TranslationEntry {
-                        text: t.clone(),
-                        ..Default::default()
-                    })
-                    .collect(),
+                tracks: vec![annotated_track],
                 ..Default::default()
             });
         }
     }
 
-    // 按开始时间对所有最终行进行排序
     lines.sort_by_key(|l| l.start_ms);
+    let is_line_timed = !lines.iter().any(|l| l.get_main_syllables().len() > 1);
 
     Ok(ParsedSourceData {
-        lines: lines.clone(),
+        lines,
         raw_metadata: HashMap::new(),
         warnings,
         source_format: LyricFormat::Spl,
-        is_line_timed_source: lines.iter().any(|l| l.main_syllables.is_empty()),
+        is_line_timed_source: is_line_timed,
         ..Default::default()
     })
 }

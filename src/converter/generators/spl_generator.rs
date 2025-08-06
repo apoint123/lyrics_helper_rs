@@ -37,11 +37,12 @@ pub fn generate_spl(
     for (i, line) in lines.iter().enumerate() {
         write!(spl_output, "{}", format_spl_timestamp(line.start_ms, false))?;
 
-        let is_word_timed = !line.main_syllables.is_empty();
+        let main_syllables = line.get_main_syllables();
+        let is_word_timed = !main_syllables.is_empty();
 
         if is_word_timed {
             let mut last_ts = line.start_ms;
-            for syl in &line.main_syllables {
+            for syl in &main_syllables {
                 if syl.start_ms > last_ts {
                     write!(spl_output, "{}", format_spl_timestamp(syl.start_ms, true))?;
                 }
@@ -53,7 +54,7 @@ pub fn generate_spl(
                 write!(spl_output, "{}", format_spl_timestamp(line.end_ms, false))?;
             }
         } else {
-            if let Some(text) = &line.line_text {
+            if let Some(text) = line.get_line_text() {
                 write!(spl_output, "{text}")?;
             }
 
@@ -70,13 +71,17 @@ pub fn generate_spl(
         writeln!(spl_output)?;
 
         // 为了简单和兼容，也为翻译行也生成相同的时间戳
-        for entry in &line.translations {
-            writeln!(
-                spl_output,
-                "{}{}",
-                format_spl_timestamp(line.start_ms, false),
-                entry.text
-            )?;
+        for track in line.get_translation_tracks() {
+            for word in &track.words {
+                for syllable in &word.syllables {
+                    writeln!(
+                        spl_output,
+                        "{}{}",
+                        format_spl_timestamp(line.start_ms, false),
+                        syllable.text
+                    )?;
+                }
+            }
         }
     }
 

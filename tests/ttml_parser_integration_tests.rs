@@ -2,7 +2,7 @@ use lyrics_helper_rs::converter::{
     generators::ttml_generator::generate_ttml,
     parsers::ttml_parser::parse_ttml,
     processors::metadata_processor::MetadataStore,
-    types::{TtmlGenerationOptions, TtmlParsingOptions, TtmlTimingMode},
+    types::{TrackMetadataKey, TtmlGenerationOptions, TtmlParsingOptions, TtmlTimingMode},
 };
 
 use std::path::Path;
@@ -25,7 +25,7 @@ fn test_parse_line_timed_basic() {
     let first_line = &result.lines[0];
     assert_eq!(first_line.start_ms, 10000);
     assert_eq!(first_line.end_ms, 15500);
-    assert_eq!(first_line.line_text.as_deref(), Some("这是一行歌词."));
+    assert_eq!(first_line.get_line_text().as_deref(), Some("这是一行歌词."));
 }
 
 #[test]
@@ -37,15 +37,16 @@ fn test_parse_word_timed_basic() {
     assert_eq!(result.lines.len(), 1);
 
     let line = &result.lines[0];
-    assert_eq!(line.main_syllables.len(), 2, "应该有两个音节");
+    let main_syllables = line.get_main_syllables();
+    assert_eq!(main_syllables.len(), 2, "应该有两个音节");
 
-    let first_syl = &line.main_syllables[0];
+    let first_syl = &main_syllables[0];
     assert_eq!(first_syl.text, "Hello");
     assert_eq!(first_syl.start_ms, 5000);
     assert_eq!(first_syl.end_ms, 5500);
     assert!(first_syl.ends_with_space, "第一个音节后面应该有空格");
 
-    let second_syl = &line.main_syllables[1];
+    let second_syl = &main_syllables[1];
     assert_eq!(second_syl.text, "world");
     assert_eq!(second_syl.start_ms, 5600);
     assert_eq!(second_syl.end_ms, 6200);
@@ -89,16 +90,22 @@ fn test_parse_word_timed_with_background() {
     let line_with_bg = result
         .lines
         .iter()
-        .find(|l| l.background_section.is_some())
+        .find(|l| l.get_background_track().is_some())
         .expect("应该找到一行有背景人声的歌词");
 
-    let bg_section = line_with_bg.background_section.as_ref().unwrap();
+    let bg_track_option = line_with_bg.get_background_track();
+    let bg_track = bg_track_option.as_ref().unwrap();
 
-    assert_eq!(bg_section.start_ms, 15000);
-    assert_eq!(bg_section.end_ms, 17500);
-    assert_eq!(bg_section.syllables.len(), 2);
-    assert_eq!(bg_section.syllables[0].text, "ooh");
-    assert_eq!(bg_section.syllables[1].text, "aah");
+    let bg_syllables: Vec<_> = bg_track.words.iter().flat_map(|w| &w.syllables).collect();
+
+    let bg_start_ms = bg_syllables.iter().map(|s| s.start_ms).min().unwrap_or(0);
+    let bg_end_ms = bg_syllables.iter().map(|s| s.end_ms).max().unwrap_or(0);
+
+    assert_eq!(bg_start_ms, 15000);
+    assert_eq!(bg_end_ms, 17500);
+    assert_eq!(bg_syllables.len(), 2);
+    assert_eq!(bg_syllables[0].text, "ooh");
+    assert_eq!(bg_syllables[1].text, "aah");
 }
 
 #[test]
@@ -167,9 +174,10 @@ fn test_parse_formatted_ttml() {
         "场景1: 应该检测到格式化输入"
     );
     let line1 = &result1.lines[0];
-    assert_eq!(line1.main_syllables.len(), 2);
+    let main_syllables1 = line1.get_main_syllables();
+    assert_eq!(main_syllables1.len(), 2);
     assert!(
-        !line1.main_syllables[0].ends_with_space,
+        !main_syllables1[0].ends_with_space,
         "场景1: 'Hello' 后面不应该有空格"
     );
 
@@ -190,8 +198,9 @@ fn test_parse_formatted_ttml() {
         "场景2: 应该检测到格式化输入"
     );
     let line2 = &result2.lines[0];
+    let main_syllables2 = line2.get_main_syllables();
     assert!(
-        line2.main_syllables[0].ends_with_space,
+        main_syllables2[0].ends_with_space,
         "场景2: 'Hello' 后面应该有空格"
     );
 
@@ -204,8 +213,9 @@ fn test_parse_formatted_ttml() {
     .unwrap();
 
     let line3 = &result3.lines[0];
+    let main_syllables3 = line3.get_main_syllables();
     assert!(
-        line3.main_syllables[0].ends_with_space,
+        main_syllables3[0].ends_with_space,
         "场景3: 在未格式化输入中，'Hello' 后面应该有空格"
     );
 
@@ -228,13 +238,14 @@ fn test_parse_formatted_ttml() {
         "场景4: 应该检测到格式化输入"
     );
     let line4 = &result4.lines[0];
-    assert_eq!(line4.main_syllables.len(), 3);
+    let main_syllables4 = line4.get_main_syllables();
+    assert_eq!(main_syllables4.len(), 3);
     assert!(
-        !line4.main_syllables[0].ends_with_space,
+        !main_syllables4[0].ends_with_space,
         "场景4: '1' 后面不应该有空格 (紧邻)"
     );
     assert!(
-        !line4.main_syllables[1].ends_with_space,
+        !main_syllables4[1].ends_with_space,
         "场景4: '2' 后面不应该有空格 (换行分隔)"
     );
 }
@@ -284,20 +295,29 @@ fn test_parse_timed_romanization() {
     assert_eq!(result.lines.len(), 1, "应该解析出一行歌词");
     let line = &result.lines[0];
 
-    assert_eq!(line.timed_romanizations.len(), 1, "应该有一组逐字罗马音");
-    let romanization_line = &line.timed_romanizations[0];
+    let romanization_tracks = line.get_romanization_tracks();
+    assert_eq!(romanization_tracks.len(), 1, "应该有一组逐字罗马音");
+    let romanization_track = romanization_tracks[0];
+    let romanization_syllables: Vec<_> = romanization_track
+        .words
+        .iter()
+        .flat_map(|w| &w.syllables)
+        .collect();
 
     assert_eq!(
-        romanization_line.lang.as_deref(),
+        romanization_track
+            .metadata
+            .get(&TrackMetadataKey::Language)
+            .map(|s| s.as_str()),
         Some("ja-Latn"),
         "罗马音语言应为 ja-Latn"
     );
-    assert_eq!(romanization_line.syllables.len(), 2, "罗马音应该有两个音节");
+    assert_eq!(romanization_syllables.len(), 2, "罗马音应该有两个音节");
 
-    assert_eq!(romanization_line.syllables[0].text, "Asa");
-    assert_eq!(romanization_line.syllables[0].start_ms, 1000);
-    assert_eq!(romanization_line.syllables[1].text, "mo");
-    assert_eq!(romanization_line.syllables[1].end_ms, 2000);
+    assert_eq!(romanization_syllables[0].text, "Asa");
+    assert_eq!(romanization_syllables[0].start_ms, 1000);
+    assert_eq!(romanization_syllables[1].text, "mo");
+    assert_eq!(romanization_syllables[1].end_ms, 2000);
 }
 
 #[test]
@@ -330,18 +350,27 @@ fn test_parse_timed_translation() {
     assert_eq!(result.lines.len(), 1, "应该解析出一行歌词");
     let line = &result.lines[0];
 
-    assert_eq!(line.timed_translations.len(), 1, "应该有一组逐字翻译");
-    let translation_line = &line.timed_translations[0];
+    let translation_tracks = line.get_translation_tracks();
+    assert_eq!(translation_tracks.len(), 1, "应该有一组逐字翻译");
+    let translation_track = translation_tracks[0];
+    let translation_syllables: Vec<_> = translation_track
+        .words
+        .iter()
+        .flat_map(|w| &w.syllables)
+        .collect();
 
     assert_eq!(
-        translation_line.lang.as_deref(),
+        translation_track
+            .metadata
+            .get(&TrackMetadataKey::Language)
+            .map(|s| s.as_str()),
         Some("zh-Hans"),
         "翻译语言应为 zh-Hans"
     );
-    assert_eq!(translation_line.syllables.len(), 2, "翻译应该有两个音节");
+    assert_eq!(translation_syllables.len(), 2, "翻译应该有两个音节");
 
-    assert_eq!(translation_line.syllables[0].text, "钟声响起");
-    assert_eq!(translation_line.syllables[0].start_ms, 28140);
-    assert_eq!(translation_line.syllables[1].text, "归家");
-    assert_eq!(translation_line.syllables[1].end_ms, 29582);
+    assert_eq!(translation_syllables[0].text, "钟声响起");
+    assert_eq!(translation_syllables[0].start_ms, 28140);
+    assert_eq!(translation_syllables[1].text, "归家");
+    assert_eq!(translation_syllables[1].end_ms, 29582);
 }

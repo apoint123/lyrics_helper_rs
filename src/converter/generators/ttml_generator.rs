@@ -13,11 +13,11 @@ use quick_xml::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::converter::{
+    TrackMetadataKey,
     processors::metadata_processor::MetadataStore,
     types::{
-        BackgroundSection, CanonicalMetadataKey, ConvertError, LyricLine, LyricSyllable,
-        RomanizationEntry, TimedAuxiliaryLine, TranslationEntry, TtmlGenerationOptions,
-        TtmlTimingMode,
+        CanonicalMetadataKey, ContentType, ConvertError, LyricLine, LyricSyllable, LyricTrack,
+        TtmlGenerationOptions, TtmlTimingMode,
     },
     utils::normalize_text_whitespace,
 };
@@ -45,22 +45,39 @@ fn format_ttml_time(ms: u64) -> String {
     }
 }
 
-fn write_timed_auxiliary_block<W: std::io::Write>(
+fn write_timed_tracks_to_head<W: std::io::Write>(
     writer: &mut Writer<W>,
     lines: &[LyricLine],
+    p_key_counter_base: i32,
+    track_kind: &str, // "translation" 或 "romanization"
     container_tag_name: &str,
     item_tag_name: &str,
-    get_data_fn: impl Fn(&LyricLine) -> &Vec<TimedAuxiliaryLine>,
 ) -> Result<(), ConvertError> {
-    let mut grouped_by_lang: HashMap<Option<String>, Vec<(&LyricLine, &TimedAuxiliaryLine)>> =
-        HashMap::new();
+    // 按语言对轨道进行分组
+    let mut grouped_by_lang: HashMap<Option<String>, Vec<(i32, &LyricTrack)>> = HashMap::new();
 
-    for line in lines {
-        for aux_line in get_data_fn(line) {
-            grouped_by_lang
-                .entry(aux_line.lang.clone())
-                .or_default()
-                .push((line, aux_line));
+    for (line_idx, line) in lines.iter().enumerate() {
+        for annotated_track in &line.tracks {
+            let tracks_to_check = match track_kind {
+                "translation" => &annotated_track.translations,
+                "romanization" => &annotated_track.romanizations,
+                _ => continue,
+            };
+
+            for track in tracks_to_check {
+                // 我们只关心有定时音节的轨道
+                if track
+                    .words
+                    .iter()
+                    .any(|w| w.syllables.iter().any(|s| s.end_ms > s.start_ms))
+                {
+                    let lang = track.metadata.get(&TrackMetadataKey::Language).cloned();
+                    grouped_by_lang
+                        .entry(lang)
+                        .or_default()
+                        .push((line_idx as i32 + p_key_counter_base, track));
+                }
+            }
         }
     }
 
@@ -81,13 +98,13 @@ fn write_timed_auxiliary_block<W: std::io::Write>(
                 }
 
                 item_builder.write_inner_content(|writer| {
-                    for (line, aux_line) in entries {
-                        if let Some(key) = &line.itunes_key {
-                            writer
-                                .create_element("text")
-                                .with_attribute(("for", key.as_str()))
-                                .write_inner_content(|writer| {
-                                    for syl in &aux_line.syllables {
+                    for (line_idx, track) in entries {
+                        writer
+                            .create_element("text")
+                            .with_attribute(("for", format!("L{}", line_idx).as_str()))
+                            .write_inner_content(|writer| {
+                                for word in &track.words {
+                                    for syl in &word.syllables {
                                         writer
                                             .create_element("span")
                                             .with_attribute((
@@ -100,9 +117,9 @@ fn write_timed_auxiliary_block<W: std::io::Write>(
                                             ))
                                             .write_text_content(BytesText::new(&syl.text))?;
                                     }
-                                    Ok(())
-                                })?;
-                        }
+                                }
+                                Ok(())
+                            })?;
                     }
                     Ok(())
                 })?;
@@ -150,7 +167,7 @@ pub fn generate_ttml(
 /// TTML 生成的核心内部逻辑。
 fn generate_ttml_inner<W: std::io::Write>(
     writer: &mut Writer<W>,
-    lines: &[LyricLine],
+    lines: &[LyricLine], // <-- 核心修改
     metadata_store: &MetadataStore,
     options: &TtmlGenerationOptions,
 ) -> Result<(), ConvertError> {
@@ -263,7 +280,6 @@ fn generate_ttml_inner<W: std::io::Write>(
     Ok(())
 }
 
-/// 写入 TTML 的 `<head>` 部分，包含所有元数据。
 fn write_ttml_head<W: std::io::Write>(
     writer: &mut Writer<W>,
     metadata_store: &MetadataStore,
@@ -277,6 +293,7 @@ fn write_ttml_head<W: std::io::Write>(
             writer
                 .create_element("metadata")
                 .write_inner_content(|writer| {
+                    // Agent writing logic (remains unchanged)
                     let mut sorted_agents: Vec<(&String, &String)> = agent_map.iter().collect();
                     sorted_agents.sort_by_key(|&(_, v_id)| {
                         v_id.strip_prefix('v')
@@ -312,118 +329,157 @@ fn write_ttml_head<W: std::io::Write>(
                         }
                     }
 
-                    let mut translations_by_lang: HashMap<Option<String>, Vec<(String, String)>> =
-                        HashMap::new();
                     if options.use_apple_format_rules {
-                        for line in lines {
-                            if let Some(key) = &line.itunes_key {
-                                for translation in &line.translations {
-                                    translations_by_lang
-                                        .entry(translation.lang.clone())
-                                        .or_default()
-                                        .push((key.clone(), translation.text.clone()));
+                        // 为 Apple 格式收集非定时（或单音节定时）的翻译
+                        let mut translations_by_lang: HashMap<
+                            Option<String>,
+                            Vec<(String, String)>,
+                        > = HashMap::new();
+
+                        for (i, line) in lines.iter().enumerate() {
+                            let p_key = format!("L{}", i + 1);
+                            for at in &line.tracks {
+                                for track in &at.translations {
+                                    let all_syllables: Vec<_> =
+                                        track.words.iter().flat_map(|w| &w.syllables).collect();
+                                    let is_timed =
+                                        all_syllables.iter().any(|s| s.end_ms > s.start_ms);
+
+                                    // 如果它确实没有计时，或者只有一个音节，则视其为非定时
+                                    if !is_timed || all_syllables.len() <= 1 {
+                                        let lang = track
+                                            .metadata
+                                            .get(&TrackMetadataKey::Language)
+                                            .cloned();
+                                        let full_text = all_syllables
+                                            .iter()
+                                            .map(|s| s.text.clone())
+                                            .collect::<Vec<_>>()
+                                            .join(" ");
+
+                                        if !full_text.trim().is_empty() {
+                                            translations_by_lang.entry(lang).or_default().push((
+                                                p_key.clone(),
+                                                normalize_text_whitespace(&full_text),
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                    let valid_songwriters: Vec<&String> = metadata_store
-                        .get_multiple_values(&CanonicalMetadataKey::Songwriter)
-                        .map(|vec| vec.iter().filter(|s| !s.trim().is_empty()).collect())
-                        .unwrap_or_default();
 
-                    let has_timed_translations =
-                        lines.iter().any(|l| !l.timed_translations.is_empty());
-                    let has_timed_romanizations =
-                        lines.iter().any(|l| !l.timed_romanizations.is_empty());
+                        let valid_songwriters: Vec<&String> = metadata_store
+                            .get_multiple_values(&CanonicalMetadataKey::Songwriter)
+                            .map(|vec| vec.iter().filter(|s| !s.trim().is_empty()).collect())
+                            .unwrap_or_default();
 
-                    if !translations_by_lang.is_empty()
-                        || !valid_songwriters.is_empty()
-                        || has_timed_translations
-                        || has_timed_romanizations
-                    {
-                        writer
-                            .create_element("iTunesMetadata")
-                            .with_attribute(("xmlns", "http://music.apple.com/lyric-ttml-internal"))
-                            .write_inner_content(|writer| {
-                                if !translations_by_lang.is_empty() {
-                                    writer.create_element("translations").write_inner_content(
-                                        |writer| {
-                                            for (lang, entries) in translations_by_lang {
-                                                let mut trans_builder = writer
-                                                    .create_element("translation")
-                                                    .with_attribute(("type", "subtitle"));
-                                                if let Some(lang_code) =
-                                                    lang.as_ref().filter(|s| !s.is_empty())
-                                                {
-                                                    trans_builder = trans_builder.with_attribute((
-                                                        "xml:lang",
-                                                        lang_code.as_str(),
-                                                    ));
-                                                }
-                                                trans_builder.write_inner_content(|writer| {
-                                                    for (key, text) in entries {
-                                                        let normalized_text =
-                                                            normalize_text_whitespace(&text);
-                                                        if !normalized_text.is_empty() {
-                                                            writer
-                                                                .create_element("text")
-                                                                .with_attribute((
-                                                                    "for",
-                                                                    key.as_str(),
-                                                                ))
-                                                                .write_text_content(
-                                                                    BytesText::new(
-                                                                        &normalized_text,
-                                                                    ),
-                                                                )?;
-                                                        }
+                        // 检查是否有任何内容来证明创建 <iTunesMetadata> 块是合理的
+                        let has_timed_translations = lines.iter().any(|l| {
+                            l.tracks.iter().any(|at| {
+                                at.translations
+                                    .iter()
+                                    .any(|t| t.words.iter().flat_map(|w| &w.syllables).count() > 1)
+                            })
+                        });
+                        let has_timed_romanizations = lines
+                            .iter()
+                            .any(|l| l.tracks.iter().any(|at| !at.romanizations.is_empty()));
+
+                        if !translations_by_lang.is_empty()
+                            || !valid_songwriters.is_empty()
+                            || has_timed_translations
+                            || has_timed_romanizations
+                        {
+                            writer
+                                .create_element("iTunesMetadata")
+                                .with_attribute((
+                                    "xmlns",
+                                    "http://music.apple.com/lyric-ttml-internal",
+                                ))
+                                .write_inner_content(|writer| {
+                                    if !translations_by_lang.is_empty() {
+                                        writer.create_element("translations").write_inner_content(
+                                            |writer| {
+                                                for (lang, entries) in translations_by_lang {
+                                                    let mut trans_builder = writer
+                                                        .create_element("translation")
+                                                        .with_attribute(("type", "subtitle"));
+                                                    if let Some(lang_code) =
+                                                        lang.as_ref().filter(|s| !s.is_empty())
+                                                    {
+                                                        trans_builder = trans_builder
+                                                            .with_attribute((
+                                                                "xml:lang",
+                                                                lang_code.as_str(),
+                                                            ));
                                                     }
-                                                    Ok(())
-                                                })?;
-                                            }
-                                            Ok(())
-                                        },
-                                    )?;
-                                }
+                                                    trans_builder.write_inner_content(
+                                                        |writer| {
+                                                            for (key, text) in entries {
+                                                                writer
+                                                                    .create_element("text")
+                                                                    .with_attribute((
+                                                                        "for",
+                                                                        key.as_str(),
+                                                                    ))
+                                                                    .write_text_content(
+                                                                        BytesText::new(&text),
+                                                                    )?;
+                                                            }
+                                                            Ok(())
+                                                        },
+                                                    )?;
+                                                }
+                                                Ok(())
+                                            },
+                                        )?;
+                                    }
 
-                                if !valid_songwriters.is_empty() {
-                                    writer.create_element("songwriters").write_inner_content(
-                                        |writer| {
-                                            for sw_name in valid_songwriters {
-                                                writer
-                                                    .create_element("songwriter")
-                                                    .write_text_content(BytesText::new(
-                                                        sw_name.trim(),
-                                                    ))?;
-                                            }
-                                            Ok(())
-                                        },
-                                    )?;
-                                }
-                                let to_io_err = |e: ConvertError| std::io::Error::other(e);
+                                    if !valid_songwriters.is_empty() {
+                                        writer.create_element("songwriters").write_inner_content(
+                                            |writer| {
+                                                for sw_name in valid_songwriters {
+                                                    writer
+                                                        .create_element("songwriter")
+                                                        .write_text_content(BytesText::new(
+                                                            sw_name.trim(),
+                                                        ))?;
+                                                }
+                                                Ok(())
+                                            },
+                                        )?;
+                                    }
 
-                                write_timed_auxiliary_block(
-                                    writer,
-                                    lines,
-                                    "translations",
-                                    "translation",
-                                    |line| &line.timed_translations,
-                                )
-                                .map_err(to_io_err)?;
+                                    let to_io_err = |e: ConvertError| std::io::Error::other(e);
 
-                                write_timed_auxiliary_block(
-                                    writer,
-                                    lines,
-                                    "transliterations",
-                                    "transliteration",
-                                    |line| &line.timed_romanizations,
-                                )
-                                .map_err(to_io_err)?;
+                                    // Write timed auxiliary tracks (multi-syllable only)
+                                    // 写入定时的辅助轨道 (仅多音节)
+                                    write_timed_tracks_to_head(
+                                        writer,
+                                        lines,
+                                        1,
+                                        "translation",
+                                        "translations",
+                                        "translation",
+                                    )
+                                    .map_err(to_io_err)?;
 
-                                Ok(())
-                            })?;
+                                    write_timed_tracks_to_head(
+                                        writer,
+                                        lines,
+                                        1,
+                                        "romanization",
+                                        "transliterations",
+                                        "transliteration",
+                                    )
+                                    .map_err(to_io_err)?;
+
+                                    Ok(())
+                                })?;
+                        }
                     }
 
+                    // amll:meta logic (remains unchanged and is always written)
                     let amll_meta_keys_to_check = [
                         ("musicName", CanonicalMetadataKey::Title),
                         ("artists", CanonicalMetadataKey::Artist),
@@ -479,7 +535,7 @@ fn write_ttml_body<W: std::io::Write>(
 
     body_builder.write_inner_content(|writer| {
         let mut p_key_counter = 0;
-        let mut current_div_lines: Vec<&LyricLine> = Vec::new();
+        let mut current_div_lines: Vec<&LyricLine> = Vec::new(); // <-- Changed
         for current_line in lines {
             if current_div_lines.is_empty() {
                 current_div_lines.push(current_line);
@@ -658,82 +714,159 @@ fn write_p_content<W: std::io::Write>(
     line: &LyricLine,
     options: &TtmlGenerationOptions,
 ) -> Result<(), ConvertError> {
-    // 根据计时模式写入主歌词
+    let main_content_tracks: Vec<_> = line
+        .tracks
+        .iter()
+        .filter(|at| at.content_type == ContentType::Main)
+        .collect();
+    let background_content_tracks: Vec<_> = line
+        .tracks
+        .iter()
+        .filter(|at| at.content_type == ContentType::Background)
+        .map(|at| &at.content)
+        .collect();
+
+    // 1. 处理主内容
     if options.timing_mode == TtmlTimingMode::Line {
-        // 逐行模式直接写入整行文本
-        let line_text_to_write = line
-            .line_text
-            .as_ref()
-            .map(|s| normalize_text_whitespace(s))
-            .unwrap_or_default();
+        let line_text_to_write = main_content_tracks
+            .iter()
+            .flat_map(|at| at.content.words.iter().flat_map(|w| &w.syllables))
+            .map(|syl| syl.text.clone())
+            .collect::<Vec<_>>()
+            .join(if options.format { " " } else { "" });
+
         if !line_text_to_write.is_empty() {
-            writer.write_event(Event::Text(BytesText::new(&line_text_to_write)))?;
+            writer.write_event(Event::Text(BytesText::new(&normalize_text_whitespace(
+                &line_text_to_write,
+            ))))?;
         }
     } else {
-        // 逐字模式：为每个音节创建带时间戳的 <span>
-        for (syl_idx, syl) in line.main_syllables.iter().enumerate() {
-            write_syllable_with_optional_splitting(writer, syl, options)?;
+        for at in &main_content_tracks {
+            write_track_as_spans(writer, &at.content, options)?;
+        }
+    }
 
-            if syl.ends_with_space && syl_idx < line.main_syllables.len() - 1 && !options.format {
-                writer.write_event(Event::Text(BytesText::new(" ")))?;
+    // 2. 处理内联辅助轨道 (用于主内容轨道)
+    if !options.use_apple_format_rules {
+        for at in &main_content_tracks {
+            for track in &at.translations {
+                write_inline_auxiliary_track(writer, track, "x-translation", options)?;
+            }
+            for track in &at.romanizations {
+                write_inline_auxiliary_track(writer, track, "x-roman", options)?;
             }
         }
     }
 
-    // 仅当不使用 Apple 规则时，才生成内嵌的 `<span>` 翻译和罗马音
-    if !options.use_apple_format_rules {
-        write_auxiliary_span(
-            writer,
-            &line.translations,
-            "x-translation",
-            &options.translation_language,
-            |e: &TranslationEntry| &e.text,
-            |e: &TranslationEntry| &e.lang,
-        )?;
-        write_auxiliary_span(
-            writer,
-            &line.romanizations,
-            "x-roman",
-            &options.romanization_language,
-            |e: &RomanizationEntry| &e.text,
-            |e: &RomanizationEntry| &e.lang,
-        )?;
-    }
-
-    // 仅在逐字模式下，才写入背景人声部分
-    if options.timing_mode == TtmlTimingMode::Word
-        && let Some(bg_section) = &line.background_section
-    {
-        write_background_section(writer, bg_section, options)?;
+    // 3. 处理背景内容
+    if options.timing_mode == TtmlTimingMode::Word && !background_content_tracks.is_empty() {
+        write_background_tracks(writer, &background_content_tracks, options)?;
     }
 
     Ok(())
 }
 
-/// 写入背景歌词部分 (`<span ttm:role="x-bg">...</span>`)。
-fn write_background_section<W: std::io::Write>(
+fn write_inline_auxiliary_track<W: std::io::Write>(
     writer: &mut Writer<W>,
-    bg_section: &BackgroundSection,
+    track: &LyricTrack,
+    role: &str,
     options: &TtmlGenerationOptions,
 ) -> Result<(), ConvertError> {
-    if options.timing_mode == TtmlTimingMode::Line
-        || (bg_section.syllables.is_empty() && bg_section.end_ms <= bg_section.start_ms)
-    {
+    let mut element_builder = writer
+        .create_element("span")
+        .with_attribute(("ttm:role", role));
+
+    if let Some(lang) = track.metadata.get(&TrackMetadataKey::Language) {
+        if !lang.is_empty() {
+            element_builder = element_builder.with_attribute(("xml:lang", lang.as_str()));
+        }
+    }
+
+    let all_syllables: Vec<_> = track.words.iter().flat_map(|w| &w.syllables).collect();
+    if all_syllables.is_empty() {
         return Ok(());
     }
+
+    let is_timed = all_syllables.iter().any(|s| s.end_ms > s.start_ms);
+    let has_multiple_syllables = all_syllables.len() > 1;
+
+    // 渲染为带有定时子 span 的嵌套结构
+    let write_as_nested_timed_spans =
+        is_timed && options.timing_mode == TtmlTimingMode::Word && has_multiple_syllables;
+
+    if write_as_nested_timed_spans {
+        let start_ms = all_syllables.iter().map(|s| s.start_ms).min().unwrap_or(0);
+        let end_ms = all_syllables.iter().map(|s| s.end_ms).max().unwrap_or(0);
+
+        element_builder
+            .with_attribute(("begin", format_ttml_time(start_ms).as_str()))
+            .with_attribute(("end", format_ttml_time(end_ms).as_str()))
+            .write_inner_content(|writer| {
+                write_track_as_spans(writer, track, options).map_err(std::io::Error::other)
+            })?;
+    } else {
+        // 渲染为单个、简单的、非定时的 span
+        let full_text = all_syllables
+            .iter()
+            .map(|s| s.text.clone())
+            .collect::<Vec<_>>()
+            .join(if options.format { " " } else { "" });
+
+        let normalized_text = normalize_text_whitespace(&full_text);
+        if !normalized_text.is_empty() {
+            element_builder.write_text_content(BytesText::new(&normalized_text))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn write_track_as_spans<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    track: &LyricTrack,
+    options: &TtmlGenerationOptions,
+) -> Result<(), ConvertError> {
+    let all_syllables: Vec<_> = track.words.iter().flat_map(|w| &w.syllables).collect();
+    for (syl_idx, syl) in all_syllables.iter().enumerate() {
+        write_syllable_with_optional_splitting(writer, syl, options)?;
+
+        if syl.ends_with_space && syl_idx < all_syllables.len() - 1 && !options.format {
+            writer.write_event(Event::Text(BytesText::new(" ")))?;
+        }
+    }
+    Ok(())
+}
+
+// =========================================================================
+// NEW HELPER: write_background_tracks
+// -------------------------------------------------------------------------
+// Objective: Encapsulates the logic for writing one or more background
+//            tracks into a single <span ttm:role="x-bg"> container.
+// =========================================================================
+fn write_background_tracks<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    bg_tracks: &[&LyricTrack],
+    options: &TtmlGenerationOptions,
+) -> Result<(), ConvertError> {
+    let all_syls: Vec<_> = bg_tracks
+        .iter()
+        .flat_map(|t| t.words.iter().flat_map(|w| &w.syllables))
+        .collect();
+    if all_syls.is_empty() {
+        return Ok(());
+    }
+
+    let start_ms = all_syls.iter().map(|s| s.start_ms).min().unwrap_or(0);
+    let end_ms = all_syls.iter().map(|s| s.end_ms).max().unwrap_or(0);
 
     writer
         .create_element("span")
         .with_attribute(("ttm:role", "x-bg"))
-        .with_attribute(("begin", format_ttml_time(bg_section.start_ms).as_str()))
-        .with_attribute(("end", format_ttml_time(bg_section.end_ms).as_str()))
+        .with_attribute(("begin", format_ttml_time(start_ms).as_str()))
+        .with_attribute(("end", format_ttml_time(end_ms).as_str()))
         .write_inner_content(|writer| {
-            let num_syls = bg_section.syllables.len();
-            for (idx, syl_bg) in bg_section.syllables.iter().enumerate() {
-                if syl_bg.text.is_empty() && syl_bg.end_ms <= syl_bg.start_ms {
-                    continue;
-                }
-
+            let num_syls = all_syls.len();
+            for (idx, syl_bg) in all_syls.iter().enumerate() {
                 let text_to_write = if syl_bg.text.trim().is_empty() {
                     syl_bg.text.clone()
                 } else {
@@ -744,10 +877,9 @@ fn write_background_section<W: std::io::Write>(
                         _ => syl_bg.text.clone(),
                     }
                 };
-
                 let temp_syl = LyricSyllable {
                     text: text_to_write,
-                    ..syl_bg.clone()
+                    ..(*syl_bg).clone()
                 };
 
                 write_syllable_with_optional_splitting(writer, &temp_syl, options)
@@ -756,28 +888,6 @@ fn write_background_section<W: std::io::Write>(
                 if syl_bg.ends_with_space && idx < num_syls - 1 && !options.format {
                     writer.write_event(Event::Text(BytesText::new(" ")))?;
                 }
-            }
-
-            if !options.use_apple_format_rules {
-                let to_io_err = |e: ConvertError| std::io::Error::other(e);
-                write_auxiliary_span(
-                    writer,
-                    &bg_section.translations,
-                    "x-translation",
-                    &options.translation_language,
-                    |e| &e.text,
-                    |e| &e.lang,
-                )
-                .map_err(to_io_err)?;
-                write_auxiliary_span(
-                    writer,
-                    &bg_section.romanizations,
-                    "x-roman",
-                    &options.romanization_language,
-                    |e| &e.text,
-                    |e| &e.lang,
-                )
-                .map_err(to_io_err)?;
             }
             Ok(())
         })?;
@@ -804,34 +914,6 @@ fn write_single_syllable_span<W: std::io::Write>(
             format_ttml_time(syl.end_ms.max(syl.start_ms)).as_str(),
         ))
         .write_text_content(BytesText::new(&text_to_write))?;
-    Ok(())
-}
-
-/// 辅助函数，用于写入翻译和罗马音的 `<span>` 标签。
-fn write_auxiliary_span<T, W: std::io::Write>(
-    writer: &mut Writer<W>,
-    entries: &[T],
-    role: &str,
-    default_lang: &Option<String>,
-    get_text: impl Fn(&T) -> &String,
-    get_lang: impl Fn(&T) -> &Option<String>,
-) -> Result<(), ConvertError> {
-    for entry in entries {
-        let text = get_text(entry);
-        let normalized_text = normalize_text_whitespace(text);
-        if !normalized_text.is_empty() {
-            let mut element_builder = writer
-                .create_element("span")
-                .with_attribute(("ttm:role", role));
-
-            let lang_code = get_lang(entry).as_ref().or(default_lang.as_ref());
-            if let Some(lang) = lang_code.filter(|s| !s.is_empty()) {
-                element_builder = element_builder.with_attribute(("xml:lang", lang.as_str()));
-            }
-
-            element_builder.write_text_content(BytesText::new(&normalized_text))?;
-        }
-    }
     Ok(())
 }
 
