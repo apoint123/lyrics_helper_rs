@@ -389,6 +389,7 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
                         actor_info.song_part
                     },
                     tracks: vec![annotated_track],
+                    itunes_key: None,
                 };
 
                 // 对于逐行歌词，使用 dialogue 的结束时间

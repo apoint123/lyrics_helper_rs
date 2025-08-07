@@ -277,6 +277,8 @@ pub struct LyricLine {
     pub agent: Option<String>,
     /// 可选的歌曲组成部分标记。
     pub song_part: Option<String>,
+    /// 可选的 iTunes Key (如 "L1", "L2")。
+    pub itunes_key: Option<String>,
 }
 
 // TODO: 这几个方法只是短期过渡用，最后应该删除。

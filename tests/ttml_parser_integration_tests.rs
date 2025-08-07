@@ -2,7 +2,9 @@ use lyrics_helper_rs::converter::{
     generators::ttml_generator::generate_ttml,
     parsers::ttml_parser::parse_ttml,
     processors::metadata_processor::MetadataStore,
-    types::{TrackMetadataKey, TtmlGenerationOptions, TtmlParsingOptions, TtmlTimingMode},
+    types::{
+        ContentType, TrackMetadataKey, TtmlGenerationOptions, TtmlParsingOptions, TtmlTimingMode,
+    },
 };
 
 use std::path::Path;
@@ -373,4 +375,96 @@ fn test_parse_timed_translation() {
     assert_eq!(translation_syllables[0].start_ms, 28140);
     assert_eq!(translation_syllables[1].text, "归家");
     assert_eq!(translation_syllables[1].end_ms, 29582);
+}
+
+#[test]
+fn test_parse_apple_music_timed_auxiliary_tracks() {
+    let content = r#"
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xml:lang="ko">
+  <head>
+    <metadata>
+      <iTunesMetadata>
+        <transliterations>
+          <transliteration xml:lang="ko-Latn">
+            <text for="L1">
+              <span begin="10.0s" end="10.8s">duryeopjineun ana</span>
+              <span ttm:role="x-bg">
+                <span begin="11.0s" end="11.8s">(heungmiroul ppun)</span>
+              </span>
+            </text>
+          </transliteration>
+        </transliterations>
+      </iTunesMetadata>
+    </metadata>
+  </head>
+  <body>
+    <p begin="10.0s" end="12.0s" itunes:key="L1">
+        <span begin="10.0s" end="10.8s">두렵지는 않아</span>
+        <span ttm:role="x-bg">
+            <span begin="11.0s" end="11.8s">(흥미로울 뿐)</span>
+        </span>
+    </p>
+  </body>
+</tt>
+"#;
+    let result = parse_ttml(content, &TtmlParsingOptions::default()).unwrap();
+
+    assert_eq!(result.lines.len(), 1, "应该解析出一行歌词");
+    let line = &result.lines[0];
+
+    let main_annotated_track = line
+        .tracks
+        .iter()
+        .find(|t| t.content_type == ContentType::Main)
+        .expect("应该找到主内容轨道");
+
+    assert_eq!(
+        main_annotated_track.romanizations.len(),
+        1,
+        "主轨道应该有一组罗马音"
+    );
+    let main_roman_track = &main_annotated_track.romanizations[0];
+    let main_roman_syllables: Vec<_> = main_roman_track
+        .words
+        .iter()
+        .flat_map(|w| &w.syllables)
+        .collect();
+
+    assert_eq!(
+        main_roman_track.metadata.get(&TrackMetadataKey::Language),
+        Some(&"ko-Latn".to_string()),
+        "主轨道罗马音的语言应为 ko-Latn"
+    );
+    assert_eq!(main_roman_syllables.len(), 1, "主轨道罗马音应该有一个音节");
+    assert_eq!(main_roman_syllables[0].text, "duryeopjineun ana");
+    assert_eq!(main_roman_syllables[0].start_ms, 10000);
+    assert_eq!(main_roman_syllables[0].end_ms, 10800);
+
+    let bg_annotated_track = line
+        .tracks
+        .iter()
+        .find(|t| t.content_type == ContentType::Background)
+        .expect("应该找到背景内容轨道");
+
+    assert_eq!(
+        bg_annotated_track.romanizations.len(),
+        1,
+        "背景轨道应该有一组罗马音"
+    );
+    let bg_roman_track = &bg_annotated_track.romanizations[0];
+    let bg_roman_syllables: Vec<_> = bg_roman_track
+        .words
+        .iter()
+        .flat_map(|w| &w.syllables)
+        .collect();
+
+    assert_eq!(
+        bg_roman_track.metadata.get(&TrackMetadataKey::Language),
+        Some(&"ko-Latn".to_string()),
+        "背景轨道罗马音的语言应为 ko-Latn"
+    );
+    assert_eq!(bg_roman_syllables.len(), 1, "背景轨道罗马音应该有一个音节");
+    assert_eq!(bg_roman_syllables[0].text, "heungmiroul ppun");
+    assert_eq!(bg_roman_syllables[0].start_ms, 11000);
+    assert_eq!(bg_roman_syllables[0].end_ms, 11800);
 }
