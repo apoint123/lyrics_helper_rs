@@ -13,11 +13,11 @@ use fancy_regex::Regex;
 
 use reqwest::Client;
 use serde_json::json;
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::{
-    config::load_qq_device,
+    config::{load_cached_config, save_cached_config},
     converter::{
         self, LyricFormat,
         types::{ConversionInput, InputFile},
@@ -419,10 +419,24 @@ impl QQMusic {
     /// 一个 `Result`，成功时包含 `QQMusic` 的实例。
     ///
     pub async fn new() -> Result<Self> {
+        const CACHE_FILENAME: &str = "qq_device.json";
         let http_client = Client::builder().timeout(Duration::from_secs(10)).build()?;
 
-        let device = load_qq_device()
-            .map_err(|e| LyricsHelperError::Internal(format!("获取缓存文件失败: {e}")))?;
+        let device = match load_cached_config::<device::Device>(CACHE_FILENAME) {
+            Ok(config) => {
+                info!("已从缓存加载 QQ Device。");
+                config.data
+            }
+            Err(_) => {
+                info!("QQ Device 配置文件不存在或无效，将创建并保存一个新设备。");
+                let new_device = device::Device::new();
+                if let Err(e) = save_cached_config(CACHE_FILENAME, &new_device) {
+                    warn!("保存新的 QQ Device 失败: {}", e);
+                }
+                new_device
+            }
+        };
+
         let api_version = "13.2.5.8";
         let qimei_result = qimei::get_qimei(&device, api_version)
             .await

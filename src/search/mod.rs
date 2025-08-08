@@ -11,7 +11,7 @@ use crate::{
     providers::Provider,
 };
 
-mod matcher;
+pub(crate) mod matcher;
 use matcher::compare_track;
 
 /// 在多个提供商中并发搜索歌曲。

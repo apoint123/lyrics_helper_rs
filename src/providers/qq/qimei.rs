@@ -238,12 +238,12 @@ pub async fn get_qimei(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::load_qq_device;
+    use crate::providers::qq::device::Device;
 
     #[tokio::test]
     #[ignore]
     async fn test_get_qimei_online() {
-        let device = load_qq_device().expect("获取设备实例失败");
+        let device = Device::new();
 
         let api_version = "13.2.5.8";
 

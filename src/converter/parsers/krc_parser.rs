@@ -81,7 +81,7 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
             if !syllables.is_empty() {
                 let main_content_track = LyricTrack {
                     words: vec![Word {
-                        syllables,
+                        syllables: syllables.clone(),
                         ..Default::default()
                     }],
                     ..Default::default()
@@ -106,22 +106,56 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                     }
                 }
 
-                let mut romanization_tracks = Vec::new();
-                if let Some(raw_text) = aux_data.romanizations.get(aux_line_index) {
-                    let normalized_text = normalize_text_whitespace(raw_text);
-                    if !normalized_text.is_empty() {
-                        let mut metadata = HashMap::new();
-                        metadata.insert(TrackMetadataKey::Language, "ja-Latn".to_string());
-                        romanization_tracks.push(LyricTrack {
-                            words: vec![Word {
-                                syllables: vec![LyricSyllable {
-                                    text: normalized_text,
+                let mut romanization_tracks: Vec<LyricTrack> = Vec::new();
+                if let Some(romanization_syllable_texts) =
+                    aux_data.romanizations.get(aux_line_index)
+                {
+                    if syllables.len() == romanization_syllable_texts.len() {
+                        let romanization_syllables: Vec<LyricSyllable> = syllables
+                            .iter()
+                            .zip(romanization_syllable_texts.iter())
+                            .map(|(main_syl, roma_text)| LyricSyllable {
+                                text: normalize_text_whitespace(roma_text),
+                                start_ms: main_syl.start_ms,
+                                end_ms: main_syl.end_ms,
+                                duration_ms: main_syl.duration_ms,
+                                ends_with_space: main_syl.ends_with_space,
+                            })
+                            .collect();
+
+                        if !romanization_syllables.is_empty() {
+                            let mut metadata = HashMap::new();
+                            metadata.insert(TrackMetadataKey::Language, "ja-Latn".to_string());
+                            romanization_tracks.push(LyricTrack {
+                                words: vec![Word {
+                                    syllables: romanization_syllables,
                                     ..Default::default()
                                 }],
-                                ..Default::default()
-                            }],
-                            metadata,
-                        });
+                                metadata,
+                            });
+                        }
+                    } else if !romanization_syllable_texts.is_empty() {
+                        warnings.push(format!(
+                            "第 {line_num} 行: 罗马音音节数 ({}) 与主歌词音节数 ({}) 不匹配，回退到逐行音译。",
+                            romanization_syllable_texts.len(),
+                            syllables.len()
+                        ));
+                        let normalized_text =
+                            normalize_text_whitespace(&romanization_syllable_texts.join(""));
+                        if !normalized_text.is_empty() {
+                            let mut metadata = HashMap::new();
+                            metadata.insert(TrackMetadataKey::Language, "ja-Latn".to_string());
+                            romanization_tracks.push(LyricTrack {
+                                words: vec![Word {
+                                    syllables: vec![LyricSyllable {
+                                        text: normalized_text,
+                                        ..Default::default()
+                                    }],
+                                    ..Default::default()
+                                }],
+                                metadata,
+                            });
+                        }
                     }
                 }
 
@@ -162,7 +196,7 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
 #[derive(Default, Debug)]
 struct KrcAuxiliaryData {
     translations: Vec<String>,
-    romanizations: Vec<String>,
+    romanizations: Vec<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -194,16 +228,19 @@ fn extract_auxiliary_data_from_krc(content: &str) -> Result<KrcAuxiliaryData, Co
             .map_err(|e| ConvertError::json_parse(e, "KRC 内嵌 JSON".to_string()))?;
 
         for entry in parsed_json.content {
-            let lines: Vec<String> = entry
-                .lyric_content
-                .iter()
-                // 每行翻译本身也是一个数组，将数组内的字符串连接起来
-                .map(|line_parts| line_parts.join(""))
-                .collect();
-
             match entry.content_type {
-                1 => aux_data.translations = lines,
-                0 => aux_data.romanizations = lines,
+                1 => {
+                    aux_data.translations = entry
+                        .lyric_content
+                        .iter()
+                        // 每行翻译本身也是一个数组，将数组内的字符串连接起来
+                        .map(|line_parts| line_parts.join(""))
+                        .collect();
+                }
+                // 音译是字级的，保留内层 Vec<String>
+                0 => {
+                    aux_data.romanizations = entry.lyric_content;
+                }
                 _ => {}
             }
         }
@@ -236,10 +273,34 @@ mod tests {
             "关于你曾交往过的那个人"
         );
 
-        assert_eq!(annotated.romanizations.len(), 1);
+        assert_eq!(annotated.romanizations.len(), 1, "应该有一个罗马音轨道");
+
+        let romanization_track = &annotated.romanizations[0];
+        let romanization_syllables = &romanization_track.words[0].syllables;
+        let main_syllables = &annotated.content.words[0].syllables;
+
         assert_eq!(
-            annotated.romanizations[0].words[0].syllables[0].text,
-            "ki mi ga ma e ni tsu ki a 't te i ta hi to no ko to"
+            romanization_syllables.len(),
+            main_syllables.len(),
+            "罗马音音节数应与主歌词音节数相同"
+        );
+        assert_eq!(romanization_syllables.len(), 15, "该行应有 15 个音节");
+
+        assert_eq!(romanization_syllables[0].text, "ki mi");
+        assert_eq!(romanization_syllables[1].text, "ga");
+        assert_eq!(romanization_syllables[14].text, "to");
+
+        assert_eq!(
+            romanization_syllables[0].start_ms, main_syllables[0].start_ms,
+            "第一个音节的开始时间应匹配"
+        );
+        assert_eq!(
+            romanization_syllables[0].end_ms, main_syllables[0].end_ms,
+            "第一个音节的结束时间应匹配"
+        );
+        assert_eq!(
+            romanization_syllables[14].start_ms, main_syllables[14].start_ms,
+            "最后一个音节的开始时间应匹配"
         );
     }
 }

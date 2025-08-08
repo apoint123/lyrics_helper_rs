@@ -65,7 +65,6 @@ fn write_timed_tracks_to_head<W: std::io::Write>(
             };
 
             for track in tracks_to_check {
-                // 我们只关心有定时音节的轨道
                 if track
                     .words
                     .iter()
@@ -167,7 +166,7 @@ pub fn generate_ttml(
 /// TTML 生成的核心内部逻辑。
 fn generate_ttml_inner<W: std::io::Write>(
     writer: &mut Writer<W>,
-    lines: &[LyricLine], // <-- 核心修改
+    lines: &[LyricLine],
     metadata_store: &MetadataStore,
     options: &TtmlGenerationOptions,
 ) -> Result<(), ConvertError> {
@@ -293,7 +292,6 @@ fn write_ttml_head<W: std::io::Write>(
             writer
                 .create_element("metadata")
                 .write_inner_content(|writer| {
-                    // Agent writing logic (remains unchanged)
                     let mut sorted_agents: Vec<(&String, &String)> = agent_map.iter().collect();
                     sorted_agents.sort_by_key(|&(_, v_id)| {
                         v_id.strip_prefix('v')
@@ -330,7 +328,6 @@ fn write_ttml_head<W: std::io::Write>(
                     }
 
                     if options.use_apple_format_rules {
-                        // 为 Apple 格式收集非定时（或单音节定时）的翻译
                         let mut translations_by_lang: HashMap<
                             Option<String>,
                             Vec<(String, String)>,
@@ -345,7 +342,6 @@ fn write_ttml_head<W: std::io::Write>(
                                     let is_timed =
                                         all_syllables.iter().any(|s| s.end_ms > s.start_ms);
 
-                                    // 如果它确实没有计时，或者只有一个音节，则视其为非定时
                                     if !is_timed || all_syllables.len() <= 1 {
                                         let lang = track
                                             .metadata
@@ -452,8 +448,6 @@ fn write_ttml_head<W: std::io::Write>(
 
                                     let to_io_err = |e: ConvertError| std::io::Error::other(e);
 
-                                    // Write timed auxiliary tracks (multi-syllable only)
-                                    // 写入定时的辅助轨道 (仅多音节)
                                     write_timed_tracks_to_head(
                                         writer,
                                         lines,
@@ -479,7 +473,6 @@ fn write_ttml_head<W: std::io::Write>(
                         }
                     }
 
-                    // amll:meta logic (remains unchanged and is always written)
                     let amll_meta_keys_to_check = [
                         ("musicName", CanonicalMetadataKey::Title),
                         ("artists", CanonicalMetadataKey::Artist),
@@ -535,7 +528,7 @@ fn write_ttml_body<W: std::io::Write>(
 
     body_builder.write_inner_content(|writer| {
         let mut p_key_counter = 0;
-        let mut current_div_lines: Vec<&LyricLine> = Vec::new(); // <-- Changed
+        let mut current_div_lines: Vec<&LyricLine> = Vec::new();
         for current_line in lines {
             if current_div_lines.is_empty() {
                 current_div_lines.push(current_line);
@@ -790,7 +783,6 @@ fn write_inline_auxiliary_track<W: std::io::Write>(
     let is_timed = all_syllables.iter().any(|s| s.end_ms > s.start_ms);
     let has_multiple_syllables = all_syllables.len() > 1;
 
-    // 渲染为带有定时子 span 的嵌套结构
     let write_as_nested_timed_spans =
         is_timed && options.timing_mode == TtmlTimingMode::Word && has_multiple_syllables;
 
@@ -805,7 +797,6 @@ fn write_inline_auxiliary_track<W: std::io::Write>(
                 write_track_as_spans(writer, track, options).map_err(std::io::Error::other)
             })?;
     } else {
-        // 渲染为单个、简单的、非定时的 span
         let full_text = all_syllables
             .iter()
             .map(|s| s.text.clone())
@@ -837,12 +828,6 @@ fn write_track_as_spans<W: std::io::Write>(
     Ok(())
 }
 
-// =========================================================================
-// NEW HELPER: write_background_tracks
-// -------------------------------------------------------------------------
-// Objective: Encapsulates the logic for writing one or more background
-//            tracks into a single <span ttm:role="x-bg"> container.
-// =========================================================================
 fn write_background_tracks<W: std::io::Write>(
     writer: &mut Writer<W>,
     bg_tracks: &[&LyricTrack],

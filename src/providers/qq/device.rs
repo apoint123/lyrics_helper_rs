@@ -138,7 +138,7 @@ impl Device {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{get_config_file_path, load_qq_device};
+    use crate::config::{get_config_file_path, load_cached_config, save_cached_config};
 
     use super::*;
     use std::fs;
@@ -159,18 +159,22 @@ mod tests {
 
     #[test]
     fn test_device_caching_flow() {
-        let cache_path = get_config_file_path("qq_device.json").expect("无法获取缓存路径");
+        const CACHE_FILENAME: &str = "qq_device_test.json";
+        let cache_path = get_config_file_path(CACHE_FILENAME).expect("无法获取缓存路径");
 
         if cache_path.exists() {
             fs::remove_file(&cache_path).expect("无法删除旧的缓存文件");
         }
 
-        let first_device = load_qq_device().expect("第一次获取设备失败");
+        let first_device = Device::new();
         println!("第一次生成的设备 IMEI: {}", first_device.imei);
+        save_cached_config(CACHE_FILENAME, &first_device).expect("第一次保存设备失败");
 
-        assert!(cache_path.exists(), "缓存文件应在第一次获取后被创建");
+        assert!(cache_path.exists(), "缓存文件应在第一次保存后被创建");
 
-        let second_device = load_qq_device().expect("第二次获取设备失败");
+        let second_device_cached =
+            load_cached_config::<Device>(CACHE_FILENAME).expect("第二次加载设备失败");
+        let second_device = second_device_cached.data;
         println!("从缓存加载的设备 IMEI: {}", second_device.imei);
 
         assert_eq!(

@@ -11,6 +11,7 @@ use tokio::{
 };
 
 use crate::{
+    config::{AmllConfig, AmllMirror},
     converter::{
         self,
         types::{ConversionInput, InputFile, LyricFormat, ParsedSourceData},
@@ -18,9 +19,11 @@ use crate::{
     error::{LyricsHelperError, Result},
     model::{
         generic::{self, CoverSize},
-        track::{FullLyricsResult, RawLyrics, SearchResult, Track},
+        match_type::MatchScorable,
+        track::{FullLyricsResult, MatchType, RawLyrics, SearchResult, Track},
     },
     providers::{Provider, amll_ttml_database::types::SearchField},
+    search::matcher::compare_track,
 };
 
 mod types;
@@ -44,6 +47,7 @@ struct GitHubCommitInfo {
 pub struct AmllTtmlDatabase {
     index: Arc<Vec<IndexEntry>>,
     http_client: Client,
+    lyrics_url_template: String,
 }
 
 impl AmllTtmlDatabase {
@@ -55,7 +59,30 @@ impl AmllTtmlDatabase {
     /// 3. 如果 SHA 不同或本地缓存不存在，则从 GitHub 下载最新的 `index.jsonl` 文件，并更新缓存和 SHA。
     /// 4. 如果 SHA 相同，或因 API 速率限制无法检查更新，则直接从本地缓存加载索引。
     /// 5. 如果被速率限制且无本地缓存，则初始化失败。
-    pub async fn new() -> Result<Self> {
+    pub async fn new(config: &AmllConfig) -> Result<Self> {
+        let (index_url, lyrics_url_template) = match &config.mirror {
+            AmllMirror::GitHub => (
+                format!(
+                    "{RAW_CONTENT_BASE_URL}/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}/{INDEX_FILE_PATH_IN_REPO}"
+                ),
+                format!(
+                    "{RAW_CONTENT_BASE_URL}/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}/raw-lyrics/{{song_id}}"
+                ),
+            ),
+            AmllMirror::Dimeta => (
+                "https://amll.mirror.dimeta.top/api/db/metadata/raw-lyrics-index.jsonl".to_string(),
+                "https://amll.mirror.dimeta.top/api/db/raw-lyrics/{song_id}".to_string(),
+            ),
+            AmllMirror::Bikonoo => (
+                "https://amll.bikonoo.com/metadata/raw-lyrics-index.jsonl".to_string(),
+                "https://amll.bikonoo.com/raw-lyrics/{song_id}".to_string(),
+            ),
+            AmllMirror::Custom {
+                index_url,
+                lyrics_url_template,
+            } => (index_url.clone(), lyrics_url_template.clone()),
+        };
+
         let cache_dir = dirs::cache_dir()
             .ok_or_else(|| LyricsHelperError::Internal("无法获取缓存目录".to_string()))?
             .join("lyrics-helper-rs/amll_ttml_db");
@@ -83,8 +110,8 @@ impl AmllTtmlDatabase {
             tracing::info!("[AMLL] 索引缓存有效或无法检查更新，从本地加载...");
             load_index_from_cache(&index_cache_path).await?
         } else if let Some(sha) = remote_head {
-            tracing::info!("[AMLL] 索引已过期或不存在，正在从 GitHub 下载...");
-            download_and_parse_index(&index_cache_path, &sha, &http_client).await?
+            tracing::info!("[AMLL] 索引已过期或不存在，正在从 {} 下载...", index_url);
+            download_and_parse_index(&index_cache_path, &sha, &http_client, &index_url).await?
         } else if index_cache_path.exists() {
             tracing::warn!("[AMLL] 将使用可能已过期的本地缓存。");
             load_index_from_cache(&index_cache_path).await?
@@ -98,6 +125,7 @@ impl AmllTtmlDatabase {
         Ok(Self {
             index: Arc::new(index_entries),
             http_client,
+            lyrics_url_template,
         })
     }
 
@@ -164,62 +192,59 @@ impl Provider for AmllTtmlDatabase {
         }
         let lower_title_to_search = title_to_search.to_lowercase();
 
-        let lower_artists_to_search: Option<Vec<String>> = track.artists.map(|artists| {
-            artists
-                .iter()
-                .map(|artist_name| artist_name.to_lowercase())
-                .collect()
-        });
-
-        let lower_album_to_search: Option<String> = track.album.map(|a| a.to_lowercase());
-
-        let mut candidates: Vec<IndexEntry> = self
+        // 快速从索引中找出所有标题可能相关的条目
+        let candidates: Vec<IndexEntry> = self
             .index
             .iter()
             .rev()
             .filter(|entry| {
-                let title_match = entry.get_meta_vec("musicName").is_some_and(|titles| {
+                entry.get_meta_vec("musicName").is_some_and(|titles| {
                     titles
                         .iter()
                         .any(|v| v.to_lowercase().contains(&lower_title_to_search))
-                });
-                if !title_match {
-                    return false;
-                }
-
-                if let Some(artists) = &lower_artists_to_search
-                    && !artists.is_empty()
-                {
-                    let artist_match = entry.get_meta_vec("artists").is_some_and(|entry_artists| {
-                        let entry_artists_lower: Vec<String> =
-                            entry_artists.iter().map(|s| s.to_lowercase()).collect();
-                        artists
-                            .iter()
-                            .all(|search_artist| entry_artists_lower.contains(search_artist))
-                    });
-                    if !artist_match {
-                        return false;
-                    }
-                }
-
-                true
+                })
             })
             .cloned()
             .collect();
 
-        if candidates.len() > 1
-            && let Some(album) = lower_album_to_search
-        {
-            candidates.retain(|entry| {
-                entry
-                    .get_meta_str("album")
-                    .is_some_and(|ea| ea.to_lowercase() == album)
-            });
+        if candidates.is_empty() {
+            return Ok(vec![]);
         }
 
-        let results = candidates
+        let mut scored_results: Vec<(IndexEntry, MatchType)> = candidates
             .into_iter()
-            .map(|entry| SearchResult {
+            .map(|entry| {
+                // 临时转换为 SearchResult 以便评分
+                let temp_search_result = SearchResult {
+                    title: entry
+                        .get_meta_str("musicName")
+                        .unwrap_or_default()
+                        .to_string(),
+                    artists: entry
+                        .get_meta_vec("artists")
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|name| crate::model::generic::Artist {
+                            id: String::new(),
+                            name,
+                        })
+                        .collect(),
+                    album: entry.get_meta_str("album").map(String::from),
+                    ..Default::default()
+                };
+                let match_type = compare_track(track, &temp_search_result);
+                (entry, match_type)
+            })
+            .filter(|(_, match_type)| *match_type != MatchType::None)
+            .collect();
+
+        scored_results.sort_by(|a, b| b.1.get_score().cmp(&a.1.get_score()));
+
+        let final_results = scored_results
+            .into_iter()
+            .take(20)
+            .map(|(entry, _)| SearchResult {
                 provider_id: entry.raw_lyric_file.clone(),
                 title: entry
                     .get_meta_str("musicName")
@@ -241,14 +266,12 @@ impl Provider for AmllTtmlDatabase {
             })
             .collect();
 
-        Ok(results)
+        Ok(final_results)
     }
 
     /// 获取并解析完整的 TTML 歌词文件。
     async fn get_full_lyrics(&self, song_id: &str) -> Result<FullLyricsResult> {
-        let ttml_url = format!(
-            "{RAW_CONTENT_BASE_URL}/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}/raw-lyrics/{song_id}"
-        );
+        let ttml_url = self.lyrics_url_template.replace("{song_id}", song_id);
         tracing::info!("[AMLL] 下载并解析 TTML: {}", ttml_url);
 
         let response_text = self
@@ -423,12 +446,10 @@ async fn download_and_parse_index(
     cache_file_path: &Path,
     remote_head_sha: &str,
     http_client: &Client,
+    index_url: &str,
 ) -> Result<Vec<IndexEntry>> {
-    let index_url = format!(
-        "{RAW_CONTENT_BASE_URL}/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}/{INDEX_FILE_PATH_IN_REPO}"
-    );
     let response_text = http_client
-        .get(&index_url)
+        .get(index_url)
         .timeout(Duration::from_secs(30))
         .send()
         .await?
@@ -485,6 +506,9 @@ mod tests {
         let provider = AmllTtmlDatabase {
             index: Arc::new(vec![index_entry.clone()]),
             http_client: Client::new(),
+            lyrics_url_template: format!(
+                "{RAW_CONTENT_BASE_URL}/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}/raw-lyrics/{{song_id}}"
+            ),
         };
 
         (provider, index_entry)
@@ -494,6 +518,7 @@ mod tests {
     async fn test_amll_search() {
         let (provider, expected_entry) = create_test_provider();
 
+        // --- 案例 1: 仅按标题搜索 ---
         let search_query1 = Track {
             title: Some("明明"),
             artists: None,
@@ -505,6 +530,7 @@ mod tests {
         assert_eq!(results1[0].provider_id, expected_entry.raw_lyric_file);
         assert_eq!(results1[0].title, "明明 (深爱着你) (Live)");
 
+        // --- 案例 2: 标题和部分艺术家匹配 ---
         let search_query2 = Track {
             title: Some("明明 (深爱着你) (Live)"),
             artists: Some(&["李宇春"]),
@@ -517,6 +543,7 @@ mod tests {
             results2[0].artists.iter().map(|a| a.name.clone()).collect();
         assert_eq!(artist_names, vec!["李宇春", "丁肆Dicey"]);
 
+        // --- 案例 3: 大小写不敏感的艺术家匹配 ---
         let search_query3 = Track {
             title: Some("明明"),
             artists: Some(&["丁肆dicey"]),
@@ -526,15 +553,26 @@ mod tests {
         let results3 = provider.search_songs(&search_query3).await.unwrap();
         assert_eq!(results3.len(), 1, "大小写不敏感的搜索应该工作");
 
+        // --- 案例 4: 艺术家不匹配，但标题匹配 ---
+        // 新逻辑：因为标题匹配，仍然会返回一个低分结果，而不是空列表。
         let search_query4 = Track {
             title: Some("明明"),
-            artists: Some(&["周杰伦"]),
+            artists: Some(&["周杰伦"]), // 错误的艺术家
             album: None,
             duration: None,
         };
         let results4 = provider.search_songs(&search_query4).await.unwrap();
-        assert!(results4.is_empty(), "用错误的艺术家应该搜索不到结果");
+        assert_eq!(
+            results4.len(),
+            1,
+            "即使艺术家不匹配，只要标题匹配，也应返回一个低分结果"
+        );
+        assert_eq!(
+            results4[0].title, "明明 (深爱着你) (Live)",
+            "应返回正确的歌曲条目"
+        );
 
+        // --- 案例 5: 标题不匹配 ---
         let search_query5 = Track {
             title: Some("不爱"),
             artists: None,

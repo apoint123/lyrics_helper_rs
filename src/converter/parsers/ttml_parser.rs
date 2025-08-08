@@ -29,6 +29,20 @@ const TAG_P: &[u8] = b"p";
 const TAG_SPAN: &[u8] = b"span";
 const TAG_BR: &[u8] = b"br";
 
+const TAG_AGENT: &[u8] = b"agent";
+const TAG_AGENT_TTM: &[u8] = b"ttm:agent";
+const TAG_NAME: &[u8] = b"name";
+const TAG_NAME_TTM: &[u8] = b"ttm:name";
+const TAG_META: &[u8] = b"meta";
+const TAG_META_AMLL: &[u8] = b"amll:meta";
+const TAG_ITUNES_METADATA: &[u8] = b"iTunesMetadata";
+const TAG_SONGWRITER: &[u8] = b"songwriter";
+const TAG_TRANSLATIONS: &[u8] = b"translations";
+const TAG_TRANSLITERATIONS: &[u8] = b"transliterations";
+const TAG_TRANSLATION: &[u8] = b"translation";
+const TAG_TRANSLITERATION: &[u8] = b"transliteration";
+const TAG_TEXT: &[u8] = b"text";
+
 const ATTR_ITUNES_TIMING: &[u8] = b"itunes:timing";
 const ATTR_XML_LANG: &[u8] = b"xml:lang";
 const ATTR_ITUNES_SONG_PART: &[u8] = b"itunes:song-part";
@@ -40,6 +54,10 @@ const ATTR_ITUNES_KEY: &[u8] = b"itunes:key";
 const ATTR_ROLE: &[u8] = b"ttm:role";
 const ATTR_ROLE_ALIAS: &[u8] = b"role";
 const ATTR_XML_SCHEME: &[u8] = b"xml:scheme";
+const ATTR_XML_ID: &[u8] = b"xml:id";
+const ATTR_KEY: &[u8] = b"key";
+const ATTR_VALUE: &[u8] = b"value";
+const ATTR_FOR: &[u8] = b"for";
 
 const ROLE_TRANSLATION: &[u8] = b"x-translation";
 const ROLE_ROMANIZATION: &[u8] = b"x-roman";
@@ -247,27 +265,20 @@ pub fn parse_ttml(
         let event = match reader.read_event_into(&mut buf) {
             Ok(event) => event,
             Err(e) => {
-                // 格式错误，尝试继续，但状态机状态可能已经错乱
-                // TODO: 加入数据恢复逻辑
-                match e {
-                    QuickXmlError::IllFormed(ill_formed_err) => {
-                        warnings.push(format!(
-                            "TTML 格式错误，位置 {}: {}。",
-                            reader.error_position(),
-                            ill_formed_err
-                        ));
-                        continue;
-                    }
-                    // 无法恢复的 IO 错误等
-                    _ => {
-                        error!(
-                            "TTML 解析错误，位置 {}: {}。无法继续解析",
-                            reader.error_position(),
-                            e
-                        );
-                        return Err(ConvertError::Xml(e));
-                    }
+                // 尝试抢救数据
+                if let QuickXmlError::IllFormed(_) = e {
+                    attempt_recovery_from_error(&mut state, &reader, &mut lines, &mut warnings, &e);
+                    buf.clear();
+                    continue;
                 }
+
+                // 无法恢复的 IO 错误等
+                error!(
+                    "TTML 解析错误，位置 {}: {}。无法继续解析",
+                    reader.error_position(),
+                    e
+                );
+                return Err(ConvertError::Xml(e));
             }
         };
 
@@ -341,11 +352,11 @@ fn handle_metadata_event(
 
     match event {
         Event::Start(e) => match e.name().as_ref() {
-            b"agent" | b"ttm:agent" => {
+            TAG_AGENT | TAG_AGENT_TTM => {
                 meta_state.in_agent = true;
-                meta_state.current_agent_id = get_string_attribute(e, reader, &[b"xml:id"])?;
+                meta_state.current_agent_id = get_string_attribute(e, reader, &[ATTR_XML_ID])?;
             }
-            b"name" | b"ttm:name" if meta_state.in_agent => {
+            TAG_NAME | TAG_NAME_TTM if meta_state.in_agent => {
                 if let Some(id) = &meta_state.current_agent_id {
                     let name = reader.read_text(e.name())?.into_owned();
                     if !name.trim().is_empty() {
@@ -360,9 +371,9 @@ fn handle_metadata_event(
                     }
                 }
             }
-            b"meta" | b"amll:meta" => {
-                let key_attr = get_string_attribute(e, reader, &[b"key"])?;
-                let value_attr = get_string_attribute(e, reader, &[b"value"])?;
+            TAG_META | TAG_META_AMLL => {
+                let key_attr = get_string_attribute(e, reader, &[ATTR_KEY])?;
+                let value_attr = get_string_attribute(e, reader, &[ATTR_VALUE])?;
 
                 let text_content = reader.read_text(e.name())?;
 
@@ -373,27 +384,27 @@ fn handle_metadata_event(
                     }
                 }
             }
-            b"iTunesMetadata" => meta_state.in_itunes_metadata = true,
-            b"songwriter" if meta_state.in_itunes_metadata => meta_state.in_songwriter = true,
-            b"translations" if meta_state.in_itunes_metadata => {
+            TAG_ITUNES_METADATA => meta_state.in_itunes_metadata = true,
+            TAG_SONGWRITER if meta_state.in_itunes_metadata => meta_state.in_songwriter = true,
+            TAG_TRANSLATIONS if meta_state.in_itunes_metadata => {
                 meta_state.current_aux_type = Some(AuxTrackType::Translation)
             }
-            b"transliterations" if meta_state.in_itunes_metadata => {
+            TAG_TRANSLITERATIONS if meta_state.in_itunes_metadata => {
                 meta_state.current_aux_type = Some(AuxTrackType::Romanization)
             }
-            b"translation" | b"transliteration" if meta_state.current_aux_type.is_some() => {
+            TAG_TRANSLATION | TAG_TRANSLITERATION if meta_state.current_aux_type.is_some() => {
                 meta_state.current_lang = get_string_attribute(e, reader, &[ATTR_XML_LANG])?;
             }
-            b"text" if meta_state.current_aux_type.is_some() => {
+            TAG_TEXT if meta_state.current_aux_type.is_some() => {
                 meta_state.in_text = true;
-                meta_state.current_text_key = get_string_attribute(e, reader, &[b"for"])?;
+                meta_state.current_text_key = get_string_attribute(e, reader, &[ATTR_FOR])?;
                 meta_state.current_main_syllables.clear();
                 meta_state.current_bg_syllables.clear();
                 meta_state.current_plain_text.clear();
                 meta_state.span_stack.clear();
                 meta_state.text_buffer.clear();
             }
-            b"span" if meta_state.in_text => {
+            TAG_SPAN if meta_state.in_text => {
                 meta_state.text_buffer.clear();
 
                 let role =
@@ -432,9 +443,9 @@ fn handle_metadata_event(
         }
         Event::End(e) => match e.name().as_ref() {
             TAG_METADATA => state.in_metadata = false,
-            b"iTunesMetadata" => meta_state.in_itunes_metadata = false,
-            b"songwriter" => meta_state.in_songwriter = false,
-            b"agent" | b"ttm:agent" => {
+            TAG_ITUNES_METADATA => meta_state.in_itunes_metadata = false,
+            TAG_SONGWRITER => meta_state.in_songwriter = false,
+            TAG_AGENT | TAG_AGENT_TTM => {
                 if let Some(id) = meta_state.current_agent_id.take()
                     && !meta_state.agent_id_to_name_map.contains_key(&id)
                 {
@@ -445,9 +456,9 @@ fn handle_metadata_event(
                 }
                 meta_state.in_agent = false;
             }
-            b"translations" | b"transliterations" => meta_state.current_aux_type = None,
-            b"translation" | b"transliteration" => meta_state.current_lang = None,
-            b"span" if meta_state.in_text => {
+            TAG_TRANSLATIONS | TAG_TRANSLITERATIONS => meta_state.current_aux_type = None,
+            TAG_TRANSLATION | TAG_TRANSLITERATION => meta_state.current_lang = None,
+            TAG_SPAN if meta_state.in_text => {
                 if let Some(ended_span_ctx) = meta_state.span_stack.pop() {
                     let raw_text = std::mem::take(&mut meta_state.text_buffer);
 
@@ -483,7 +494,7 @@ fn handle_metadata_event(
                     }
                 }
             }
-            b"text" if meta_state.in_text => {
+            TAG_TEXT if meta_state.in_text => {
                 if let (Some(key), Some(aux_type)) = (
                     meta_state.current_text_key.take(),
                     meta_state.current_aux_type,
@@ -556,8 +567,8 @@ fn handle_metadata_event(
 
 /// 处理全局事件（在 `<p>` 或 `<metadata>` 之外的事件）。
 /// 主要负责识别文档的根元素、body、div 和 p 的开始，并相应地更新状态。
-fn handle_global_event<'a>(
-    event: &Event<'a>,
+fn handle_global_event(
+    event: &Event<'_>,
     state: &mut TtmlParserState,
     reader: &Reader<&[u8]>,
     raw_metadata: &mut HashMap<String, Vec<String>>,
@@ -636,7 +647,7 @@ fn handle_global_event<'a>(
 }
 
 /// 处理 `</p>` 结束事件。
-/// 在此事件中，会回填来自 <iTunesMetadata> 的非定时翻译
+/// 在此事件中，会回填来自 <iTunesMetadata> 的逐行翻译
 fn handle_p_end(
     state: &mut TtmlParserState,
     lines: &mut Vec<LyricLine>,
@@ -644,7 +655,7 @@ fn handle_p_end(
 ) {
     if let Some(mut p_data) = state.body_state.current_p_element_data.take() {
         if let Some(key) = &p_data.itunes_key {
-            // 回填非定时翻译
+            // 回填逐行翻译
             if let Some((text, lang)) = state.metadata_state.translation_map.get(key) {
                 // 将其附加到第一个主内容轨道上
                 if let Some(main_annotated_track) = p_data
@@ -1560,6 +1571,51 @@ fn get_time_attribute(
     attr_names: &[&[u8]],
 ) -> Result<Option<u64>, ConvertError> {
     get_attribute_with_aliases(e, reader, attr_names, parse_ttml_time_to_ms)
+}
+
+/// 尝试从一个XML格式错误中恢复。
+fn attempt_recovery_from_error(
+    state: &mut TtmlParserState,
+    reader: &Reader<&[u8]>,
+    lines: &mut Vec<LyricLine>,
+    warnings: &mut Vec<String>,
+    error: &quick_xml::errors::Error,
+) {
+    let position = reader.error_position();
+    warnings.push(format!("TTML 格式错误，位置 {}: {}。", position, error));
+
+    if state.body_state.in_p {
+        // 错误发生在 <p> 标签内部
+        // 尝试抢救当前行的数据，然后跳出这个<p>
+        warnings.push(format!(
+            "错误发生在 <p> 元素内部 (开始于 {}ms)。尝试恢复已经解析的数据。",
+            state
+                .body_state
+                .current_p_element_data
+                .as_ref()
+                .map_or(0, |d| d.start_ms)
+        ));
+
+        // 处理和保存当前 <p> 中已经累积的数据
+        // 把current_p_element_data中的内容（即使不完整）转换成一个 LyricLine
+        handle_p_end(state, lines, warnings);
+
+        // handle_p_end 已经将 in_p 设为 false，并清理了 span 栈，
+        // 我们现在回到了“p之外，body之内”的安全状态
+    } else if state.in_metadata {
+        // 错误发生在 <metadata> 内部
+        // 元数据太复杂了，简单地放弃所有数据好了
+        warnings.push("错误发生在 <metadata> 块内部。放弃所有元数据。".to_string());
+        state.in_metadata = false;
+        state.metadata_state = MetadataParseState::default();
+    } else {
+        // 错误发生在全局作用域
+        // 可能是 <body> 或 <div> 标签损坏。恢复的把握较小。
+        // 我们重置所有 body 相关的状态，期望能找到下一个有效的 <p>。
+        warnings
+            .push("错误发生在全局作用域。将重置解析器状态，尝试寻找下一个有效元素。".to_string());
+        state.body_state = BodyParseState::default();
+    }
 }
 
 #[cfg(test)]

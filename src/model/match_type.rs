@@ -1,5 +1,7 @@
 //! 定义了用于匹配度量和评分的数据结构。
 
+use crate::model::track::MatchType;
+
 /// 名称（标题/专辑）的匹配程度。
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub(crate) enum NameMatchType {
@@ -39,6 +41,21 @@ pub(crate) enum DurationMatchType {
 /// 将匹配结果转换为可计算的分数。
 pub(crate) trait MatchScorable {
     fn get_score(&self) -> i32;
+}
+
+impl MatchScorable for MatchType {
+    fn get_score(&self) -> i32 {
+        match self {
+            MatchType::Perfect => 8,
+            MatchType::VeryHigh => 7,
+            MatchType::High => 6,
+            MatchType::PrettyHigh => 5,
+            MatchType::Medium => 4,
+            MatchType::Low => 3,
+            MatchType::VeryLow => 2,
+            MatchType::None => 0,
+        }
+    }
 }
 
 impl MatchScorable for NameMatchType {

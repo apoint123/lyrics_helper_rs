@@ -17,6 +17,7 @@ use std::{
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use chrono::{Duration, Utc};
 use md5::{Digest, Md5};
 use reqwest::Client;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -24,7 +25,7 @@ use serde_json::json;
 use tracing::{info, instrument, warn};
 
 use crate::{
-    config::{KugouConfig, load_kugou_config, save_kugou_config},
+    config::{load_cached_config, save_cached_config},
     converter::{
         self, LyricFormat,
         types::{ConversionInput, ConversionOptions, InputFile},
@@ -53,6 +54,13 @@ const X_ROUTER_COMPLEX_SEARCH: &str = "complexsearch.kugou.com";
 const X_ROUTER_PUB_SONGS: &str = "pubsongs.kugou.com";
 const X_ROUTER_MEDIA_STORE: &str = "media.store.kugou.com";
 const X_ROUTER_TRACKER: &str = "tracker.kugou.com";
+
+/// 酷狗音乐的配置项。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) struct KugouConfig {
+    /// 缓存的酷狗音乐 DFID。
+    pub dfid: String,
+}
 
 /// 酷狗音乐的 Provider 实现
 #[derive(Debug, Clone)]
@@ -186,21 +194,42 @@ impl KugouMusic {
 
     /// 公共构造函数，集成了加载和注册逻辑
     pub async fn new() -> Result<Self> {
-        if let Ok(config) = load_kugou_config() {
-            return Ok(Self::from_dfid(config.dfid));
+        const CACHE_FILENAME: &str = "kugou_config.json";
+        const DFID_EXPIRATION_DAYS: i64 = 7;
+
+        let cached_config = load_cached_config::<KugouConfig>(CACHE_FILENAME);
+
+        if let Ok(config) = &cached_config {
+            if Utc::now() - config.last_updated < Duration::days(DFID_EXPIRATION_DAYS) {
+                info!("使用有效的酷狗 DFID 缓存。");
+                return Ok(Self::from_dfid(config.data.dfid.clone()));
+            }
+            info!("酷狗 DFID 缓存已过期。");
         }
 
-        info!("未找到 DFID 缓存，正在注册...");
-        let new_instance = Self::register_via_network().await?;
-
-        let new_config = KugouConfig {
-            dfid: new_instance.dfid.clone(),
-        };
-        if let Err(e) = save_kugou_config(&new_config) {
-            warn!("保存新的 DFID 失败: {}", e);
+        info!("正在通过网络为酷狗注册新设备...");
+        match Self::register_via_network().await {
+            Ok(new_instance) => {
+                info!("酷狗新设备注册成功。");
+                let new_config = KugouConfig {
+                    dfid: new_instance.dfid.clone(),
+                };
+                if let Err(e) = save_cached_config(CACHE_FILENAME, &new_config) {
+                    warn!("保存新的酷狗 DFID 失败: {}", e);
+                }
+                Ok(new_instance)
+            }
+            Err(e) => {
+                if let Ok(config) = cached_config {
+                    warn!("酷狗注册失败 ({})，将继续使用已过期的 DFID。", e);
+                    Ok(Self::from_dfid(config.data.dfid))
+                } else {
+                    Err(LyricsHelperError::ApiError(format!(
+                        "酷狗设备注册失败，且无可用缓存: {e}"
+                    )))
+                }
+            }
         }
-
-        Ok(new_instance)
     }
 
     /// 私有辅助函数，用于执行需要安卓签名的 GET 请求。

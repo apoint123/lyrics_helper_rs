@@ -112,22 +112,22 @@ pub enum ProviderName {
 
 impl ProviderName {
     /// 获取提供商的字符串标识符
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            ProviderName::QQMusic => "qq",
-            ProviderName::Netease => "netease",
-            ProviderName::Kugou => "kugou",
-            ProviderName::AmllTtmlDatabase => "amll-ttml-database",
+            Self::QQMusic => "qq",
+            Self::Netease => "netease",
+            Self::Kugou => "kugou",
+            Self::AmllTtmlDatabase => "amll-ttml-database",
         }
     }
 
     /// 从字符串标识符创建 ProviderName
     pub fn try_from_str(s: &str) -> Option<Self> {
         match s {
-            "qq" => Some(ProviderName::QQMusic),
-            "netease" => Some(ProviderName::Netease),
-            "kugou" => Some(ProviderName::Kugou),
-            "amll-ttml-database" => Some(ProviderName::AmllTtmlDatabase),
+            "qq" => Some(Self::QQMusic),
+            "netease" => Some(Self::Netease),
+            "kugou" => Some(Self::Kugou),
+            "amll-ttml-database" => Some(Self::AmllTtmlDatabase),
             _ => None,
         }
     }
@@ -135,9 +135,9 @@ impl ProviderName {
     /// 获取所有支持的提供商
     pub fn all() -> Vec<Self> {
         vec![
-            ProviderName::QQMusic,
-            ProviderName::Netease,
-            ProviderName::Kugou,
+            Self::QQMusic,
+            Self::Netease,
+            Self::Kugou,
             ProviderName::AmllTtmlDatabase,
         ]
     }
@@ -145,10 +145,10 @@ impl ProviderName {
     /// 获取提供商的显示名称
     pub fn display_name(&self) -> &'static str {
         match self {
-            ProviderName::QQMusic => "QQ音乐",
-            ProviderName::Netease => "网易云音乐",
-            ProviderName::Kugou => "酷狗音乐",
-            ProviderName::AmllTtmlDatabase => "AMLL TTML 数据库",
+            Self::QQMusic => "QQ音乐",
+            Self::Netease => "网易云音乐",
+            Self::Kugou => "酷狗音乐",
+            Self::AmllTtmlDatabase => "AMLL TTML 数据库",
         }
     }
 }
@@ -180,7 +180,7 @@ use crate::{
 };
 
 /// 定义歌词的搜索策略。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchMode {
     /// 按预设顺序依次搜索提供商。
     ///
@@ -212,22 +212,22 @@ impl SearchMode {
     }
 
     /// 创建一个只搜索网易云音乐的模式
-    pub fn netease_only() -> Self {
+    pub const fn netease_only() -> Self {
         SearchMode::Specific(ProviderName::Netease)
     }
 
     /// 创建一个只搜索QQ音乐的模式
-    pub fn qq_only() -> Self {
+    pub const fn qq_only() -> Self {
         SearchMode::Specific(ProviderName::QQMusic)
     }
 
     /// 创建一个只搜索酷狗音乐的模式
-    pub fn kugou_only() -> Self {
+    pub const fn kugou_only() -> Self {
         SearchMode::Specific(ProviderName::Kugou)
     }
 
     /// 创建一个只搜索AMLL TTML数据库的模式
-    pub fn amll_only() -> Self {
+    pub const fn amll_only() -> Self {
         SearchMode::Specific(ProviderName::AmllTtmlDatabase)
     }
 }
@@ -281,6 +281,14 @@ impl LyricsHelper {
             >,
         >;
 
+        let amll_config = match config::load_amll_config() {
+            Ok(config) => config,
+            Err(e) => {
+                tracing::error!("[Main] 加载 AMLL 镜像配置失败: {}. 使用默认设置。", e);
+                config::AmllConfig::default()
+            }
+        };
+
         let initializers: Vec<Initializer<'_>> = vec![
             Box::pin(async {
                 (
@@ -305,7 +313,9 @@ impl LyricsHelper {
             Box::pin(async {
                 (
                     "AmllTtmlDatabase",
-                    AmllTtmlDatabase::new().await.map(|p| Box::new(p) as Box<_>),
+                    AmllTtmlDatabase::new(&amll_config)
+                        .await
+                        .map(|p| Box::new(p) as Box<_>),
                 )
             }),
         ];

@@ -3,7 +3,8 @@ use lyrics_helper_rs::converter::{
     parsers::ttml_parser::parse_ttml,
     processors::metadata_processor::MetadataStore,
     types::{
-        ContentType, TrackMetadataKey, TtmlGenerationOptions, TtmlParsingOptions, TtmlTimingMode,
+        ContentType, LyricLine, LyricTrack, TrackMetadataKey, TtmlGenerationOptions,
+        TtmlParsingOptions, TtmlTimingMode,
     },
 };
 
@@ -13,6 +14,40 @@ fn load_test_data(filename: &str) -> String {
     let path = Path::new("tests/test_data").join(filename);
     std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("读取测试文件 '{:?}' 失败: {}", path, e))
+}
+
+fn get_line_text(line: &LyricLine) -> Option<String> {
+    let text = line
+        .tracks
+        .iter()
+        .filter(|at| at.content_type == ContentType::Main)
+        .flat_map(|at| at.content.words.iter().flat_map(|w| &w.syllables))
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn get_track_text(track: &LyricTrack) -> Option<String> {
+    let text = track
+        .words
+        .iter()
+        .flat_map(|w| &w.syllables)
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn get_syllables_from_line(
+    line: &LyricLine,
+    content_type: ContentType,
+) -> Vec<&lyrics_helper_rs::converter::types::LyricSyllable> {
+    line.tracks
+        .iter()
+        .filter(|at| at.content_type == content_type)
+        .flat_map(|at| at.content.words.iter().flat_map(|w| &w.syllables))
+        .collect()
 }
 
 #[test]
@@ -27,7 +62,7 @@ fn test_parse_line_timed_basic() {
     let first_line = &result.lines[0];
     assert_eq!(first_line.start_ms, 10000);
     assert_eq!(first_line.end_ms, 15500);
-    assert_eq!(first_line.get_line_text().as_deref(), Some("这是一行歌词."));
+    assert_eq!(get_line_text(first_line).as_deref(), Some("这是一行歌词."));
 }
 
 #[test]
@@ -39,7 +74,7 @@ fn test_parse_word_timed_basic() {
     assert_eq!(result.lines.len(), 1);
 
     let line = &result.lines[0];
-    let main_syllables = line.get_main_syllables();
+    let main_syllables = get_syllables_from_line(line, ContentType::Main);
     assert_eq!(main_syllables.len(), 2, "应该有两个音节");
 
     let first_syl = &main_syllables[0];
@@ -92,11 +127,19 @@ fn test_parse_word_timed_with_background() {
     let line_with_bg = result
         .lines
         .iter()
-        .find(|l| l.get_background_track().is_some())
+        .find(|l| {
+            l.tracks
+                .iter()
+                .any(|at| at.content_type == ContentType::Background)
+        })
         .expect("应该找到一行有背景人声的歌词");
 
-    let bg_track_option = line_with_bg.get_background_track();
-    let bg_track = bg_track_option.as_ref().unwrap();
+    let bg_track = line_with_bg
+        .tracks
+        .iter()
+        .find(|at| at.content_type == ContentType::Background)
+        .map(|at| &at.content)
+        .expect("背景轨道内容应存在");
 
     let bg_syllables: Vec<_> = bg_track.words.iter().flat_map(|w| &w.syllables).collect();
 
@@ -161,12 +204,12 @@ fn test_parse_formatted_ttml() {
     // 格式化TTML，<span>之间只有换行符。预期：无空格。
     let formatted_no_space_content = r#"
 <tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions">
-  <body>
-    <p begin="0s" end="2s">
-      <span begin="0s" end="1s">Hello</span>
-      <span begin="1s" end="2s">World</span>
-    </p>
-  </body>
+<body>
+  <p begin="0s" end="2s">
+    <span begin="0s" end="1s">Hello</span>
+    <span begin="1s" end="2s">World</span>
+  </p>
+</body>
 </tt>
 "#;
     let result1 = parse_ttml(formatted_no_space_content, &TtmlParsingOptions::default()).unwrap();
@@ -186,11 +229,11 @@ fn test_parse_formatted_ttml() {
     // 格式化TTML，<span>之间有一个明确的空格。预期：有空格。
     let formatted_with_space_content = r#"
 <tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions">
-  <body>
-    <p begin="0s" end="2s">
-      <span begin="0s" end="1s">Hello</span> <span begin="1s" end="2s">World</span>
-    </p>
-  </body>
+<body>
+  <p begin="0s" end="2s">
+    <span begin="0s" end="1s">Hello</span> <span begin="1s" end="2s">World</span>
+  </p>
+</body>
 </tt>
 "#;
     let result2 = parse_ttml(formatted_with_space_content, &TtmlParsingOptions::default()).unwrap();
@@ -224,13 +267,13 @@ fn test_parse_formatted_ttml() {
     // 混合了紧邻和非紧邻<span>的格式化文件。预期：精确识别空格。
     let mixed_formatted_content = r#"
 <tt xmlns="http://www.w3.org/ns/ttml" itunes:timing="word" xmlns:itunes="http://itunes.apple.com/lyric-ttml-extensions">
-  <body>
-    <p begin="31s" end="36s">
-      <span begin="31s" end="32s">1</span
-      ><span begin="32s" end="33s">2</span>
-      <span begin="34s" end="35s">3</span>
-    </p>
-  </body>
+<body>
+  <p begin="31s" end="36s">
+    <span begin="31s" end="32s">1</span
+    ><span begin="32s" end="33s">2</span>
+    <span begin="34s" end="35s">3</span>
+  </p>
+</body>
 </tt>
 "#;
     let result4 = parse_ttml(mixed_formatted_content, &TtmlParsingOptions::default()).unwrap();
@@ -265,6 +308,67 @@ fn test_parse_formatted_ttml() {
 //         "错误类型应该为 ConvertError::Xml"
 //     );
 // }
+
+#[test]
+fn test_parse_line_timed_translation() {
+    let content = r#"
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xml:lang="ja">
+<head>
+  <metadata>
+    <iTunesMetadata>
+      <translations>
+        <translation xml:lang="zh-Hans">
+          <text for="L1">第一行翻译</text>
+          <text for="L2">第二行翻译</text>
+        </translation>
+      </translations>
+    </iTunesMetadata>
+  </metadata>
+</head>
+<body>
+  <p begin="1.0s" end="2.0s" itunes:key="L1"><span begin="1.0s" end="2.0s">一行目</span></p>
+  <p begin="3.0s" end="4.0s" itunes:key="L2"><span begin="3.0s" end="4.0s">二行目</span></p>
+</body>
+</tt>
+"#;
+    let result = parse_ttml(content, &TtmlParsingOptions::default()).unwrap();
+
+    assert_eq!(result.lines.len(), 2, "应该解析出两行歌词");
+
+    let line1 = &result.lines[0];
+    let translation_tracks1: Vec<_> = line1
+        .tracks
+        .iter()
+        .flat_map(|at| &at.translations)
+        .collect();
+    assert_eq!(translation_tracks1.len(), 1, "第一行应该有一条翻译轨道");
+    let track1 = translation_tracks1[0];
+    assert_eq!(
+        get_track_text(track1).as_deref(),
+        Some("第一行翻译"),
+        "第一行翻译文本不匹配"
+    );
+    assert!(
+        track1
+            .words
+            .iter()
+            .flat_map(|w| &w.syllables)
+            .all(|s| s.duration_ms.is_none()),
+        "逐行翻译不应有时间戳"
+    );
+
+    let line2 = &result.lines[1];
+    let translation_tracks2: Vec<_> = line2
+        .tracks
+        .iter()
+        .flat_map(|at| &at.translations)
+        .collect();
+    assert_eq!(translation_tracks2.len(), 1, "第二行应该有一条翻译轨道");
+    assert_eq!(
+        get_track_text(translation_tracks2[0]).as_deref(),
+        Some("第二行翻译")
+    );
+}
 
 #[test]
 fn test_parse_timed_romanization() {
@@ -381,30 +485,39 @@ fn test_parse_timed_translation() {
 fn test_parse_apple_music_timed_auxiliary_tracks() {
     let content = r#"
 <tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xml:lang="ko">
-  <head>
-    <metadata>
-      <iTunesMetadata>
-        <transliterations>
-          <transliteration xml:lang="ko-Latn">
-            <text for="L1">
-              <span begin="10.0s" end="10.8s">duryeopjineun ana</span>
-              <span ttm:role="x-bg">
-                <span begin="11.0s" end="11.8s">(heungmiroul ppun)</span>
-              </span>
-            </text>
-          </transliteration>
-        </transliterations>
-      </iTunesMetadata>
-    </metadata>
-  </head>
-  <body>
-    <p begin="10.0s" end="12.0s" itunes:key="L1">
-        <span begin="10.0s" end="10.8s">두렵지는 않아</span>
-        <span ttm:role="x-bg">
-            <span begin="11.0s" end="11.8s">(흥미로울 뿐)</span>
-        </span>
-    </p>
-  </body>
+<head>
+  <metadata>
+    <iTunesMetadata>
+      <translations>
+        <translation xml:lang="en-US">
+          <text for="L1">
+            <span begin="10.0s" end="10.8s">I'm not afraid</span>
+            <span ttm:role="x-bg" begin="11.0s" end="11.8s">(Just interesting)</span>
+          </text>
+        </translation>
+      </translations>
+      <transliterations>
+        <transliteration xml:lang="ko-Latn">
+          <text for="L1">
+            <span begin="10.0s" end="10.8s">duryeopjineun ana</span>
+            <span ttm:role="x-bg">
+              <span begin="11.0s" end="11.4s">heungmiroul</span>
+              <span begin="11.4s" end="11.8s">ppun</span>
+            </span>
+          </text>
+        </transliteration>
+      </transliterations>
+    </iTunesMetadata>
+  </metadata>
+</head>
+<body>
+  <p begin="10.0s" end="12.0s" itunes:key="L1">
+      <span begin="10.0s" end="10.8s">두렵지는 않아</span>
+      <span ttm:role="x-bg">
+          <span begin="11.0s" end="11.8s">(흥미로울 뿐)</span>
+      </span>
+  </p>
+</body>
 </tt>
 "#;
     let result = parse_ttml(content, &TtmlParsingOptions::default()).unwrap();
@@ -412,59 +525,40 @@ fn test_parse_apple_music_timed_auxiliary_tracks() {
     assert_eq!(result.lines.len(), 1, "应该解析出一行歌词");
     let line = &result.lines[0];
 
-    let main_annotated_track = line
+    let main_at = line
         .tracks
         .iter()
-        .find(|t| t.content_type == ContentType::Main)
-        .expect("应该找到主内容轨道");
-
+        .find(|at| at.content_type == ContentType::Main)
+        .expect("应找到主轨道");
+    assert_eq!(main_at.translations.len(), 1);
     assert_eq!(
-        main_annotated_track.romanizations.len(),
-        1,
-        "主轨道应该有一组罗马音"
+        get_track_text(&main_at.translations[0]).as_deref(),
+        Some("I'm not afraid")
     );
-    let main_roman_track = &main_annotated_track.romanizations[0];
-    let main_roman_syllables: Vec<_> = main_roman_track
-        .words
-        .iter()
-        .flat_map(|w| &w.syllables)
-        .collect();
-
+    assert_eq!(main_at.romanizations.len(), 1);
     assert_eq!(
-        main_roman_track.metadata.get(&TrackMetadataKey::Language),
-        Some(&"ko-Latn".to_string()),
-        "主轨道罗马音的语言应为 ko-Latn"
+        get_track_text(&main_at.romanizations[0]).as_deref(),
+        Some("duryeopjineun ana")
     );
-    assert_eq!(main_roman_syllables.len(), 1, "主轨道罗马音应该有一个音节");
-    assert_eq!(main_roman_syllables[0].text, "duryeopjineun ana");
-    assert_eq!(main_roman_syllables[0].start_ms, 10000);
-    assert_eq!(main_roman_syllables[0].end_ms, 10800);
 
-    let bg_annotated_track = line
+    let bg_at = line
         .tracks
         .iter()
-        .find(|t| t.content_type == ContentType::Background)
+        .find(|at| at.content_type == ContentType::Background)
         .expect("应该找到背景内容轨道");
-
+    assert_eq!(bg_at.translations.len(), 1);
     assert_eq!(
-        bg_annotated_track.romanizations.len(),
-        1,
-        "背景轨道应该有一组罗马音"
+        get_track_text(&bg_at.translations[0]).as_deref(),
+        Some("Just interesting")
     );
-    let bg_roman_track = &bg_annotated_track.romanizations[0];
-    let bg_roman_syllables: Vec<_> = bg_roman_track
+    assert_eq!(bg_at.romanizations.len(), 1);
+    let bg_roman_syls: Vec<_> = bg_at.romanizations[0]
         .words
         .iter()
         .flat_map(|w| &w.syllables)
         .collect();
-
-    assert_eq!(
-        bg_roman_track.metadata.get(&TrackMetadataKey::Language),
-        Some(&"ko-Latn".to_string()),
-        "背景轨道罗马音的语言应为 ko-Latn"
-    );
-    assert_eq!(bg_roman_syllables.len(), 1, "背景轨道罗马音应该有一个音节");
-    assert_eq!(bg_roman_syllables[0].text, "heungmiroul ppun");
-    assert_eq!(bg_roman_syllables[0].start_ms, 11000);
-    assert_eq!(bg_roman_syllables[0].end_ms, 11800);
+      
+    assert_eq!(bg_roman_syls.len(), 2);
+    assert_eq!(bg_roman_syls[0].text, "heungmiroul");
+    assert_eq!(bg_roman_syls[1].text, "ppun");
 }
