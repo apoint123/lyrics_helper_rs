@@ -48,10 +48,10 @@ pub(crate) fn compare_track(track: &Track, result: &SearchResult) -> MatchType {
     let album_match = compare_name(track.album, result.album.as_deref());
     let duration_match = compare_duration(track.duration, result.duration);
 
-    let total_score = title_match.get_score() as f64 * TITLE_WEIGHT
-        + artist_match.get_score() as f64 * ARTIST_WEIGHT
-        + album_match.get_score() as f64 * ALBUM_WEIGHT
-        + duration_match.get_score() as f64 * DURATION_WEIGHT;
+    let total_score = f64::from(title_match.get_score()) * TITLE_WEIGHT
+        + f64::from(artist_match.get_score()) * ARTIST_WEIGHT
+        + f64::from(album_match.get_score()) * ALBUM_WEIGHT
+        + f64::from(duration_match.get_score()) * DURATION_WEIGHT;
 
     // 计算理论最高分
     let mut possible_score = MAX_SINGLE_SCORE * (TITLE_WEIGHT + ARTIST_WEIGHT);
@@ -124,7 +124,7 @@ fn compare_name(name1_opt: Option<&str>, name2_opt: Option<&str>) -> Option<Name
         "with",
     ];
     for suffix in special_suffixes {
-        let suffixed_form = format!("({}", suffix);
+        let suffixed_form = format!("({suffix}");
         if (name1.contains(&suffixed_form)
             && !name2.contains(&suffixed_form)
             && name2 == name1.split(&suffixed_form).next().unwrap_or("").trim())
@@ -161,7 +161,9 @@ fn compare_name(name1_opt: Option<&str>, name2_opt: Option<&str>) -> Option<Name
             .filter(|(c1, c2)| c1 == c2)
             .count();
         let len = name1.chars().count();
-        let ratio = count as f64 / len as f64;
+        let count_f64 = f64::from(u32::try_from(count).unwrap_or(u32::MAX));
+        let len_f64 = f64::from(u32::try_from(len).unwrap_or(u32::MAX));
+        let ratio = count_f64 / len_f64;
         if (ratio >= 0.8 && len >= 4) || (ratio >= 0.5 && (2..=3).contains(&len)) {
             return Some(NameMatchType::High);
         }
@@ -232,7 +234,9 @@ where
         return Some(ArtistMatchType::Perfect);
     }
 
-    let jaccard_score = intersection_size as f64 / union_size as f64;
+    let intersection_size_f64 = f64::from(u32::try_from(intersection_size).unwrap_or(u32::MAX));
+    let union_size_f64 = f64::from(u32::try_from(union_size).unwrap_or(u32::MAX));
+    let jaccard_score = intersection_size_f64 / union_size_f64;
 
     for &(threshold, match_type) in JACCARD_THRESHOLDS {
         if jaccard_score >= threshold {
@@ -256,11 +260,15 @@ fn compare_duration(duration1: Option<u64>, duration2: Option<u64>) -> Option<Du
 
     let d1 = duration1.filter(|&d| d > 0)?;
     let d2 = duration2.filter(|&d| d > 0)?;
-    let diff = (d1 as i64 - d2 as i64).unsigned_abs() as f64;
+
+    let d1_u32 = u32::try_from(d1).ok()?;
+    let d2_u32 = u32::try_from(d2).ok()?;
+
+    let diff = (f64::from(d1_u32) - f64::from(d2_u32)).abs();
 
     // 高斯衰减
-    let gaussian_score = (-(diff.powi(2)) / (2.0 * SIGMA.powi(2))).exp();
-    let max_score = DurationMatchType::Perfect.get_score() as f64;
+    let gaussian_score = (-diff.powi(2) / (2.0 * SIGMA.powi(2))).exp();
+    let max_score = f64::from(DurationMatchType::Perfect.get_score());
     let final_score = gaussian_score * max_score;
 
     for &(threshold, match_type) in DURATION_THRESHOLDS {
@@ -295,16 +303,17 @@ mod tests {
             .collect();
         let intersection_size = set1.intersection(&set2).count();
         let union_size = set1.union(&set2).count();
+        let intersection_size_f66 = f64::from(u32::try_from(intersection_size).unwrap_or(u32::MAX));
+        let union_size_f66 = f64::from(u32::try_from(union_size).unwrap_or(u32::MAX));
         let jaccard_score = if union_size == 0 {
             1.0
         } else {
-            intersection_size as f64 / union_size as f64
+            intersection_size_f66 / union_size_f66
         };
 
         assert_eq!(
             result, expected_match,
-            "\n[Artist Test Failed]: {}\n  - Jaccard: {:.4}\n  - Expected: {:?}, Actual: {:?}",
-            case_description, jaccard_score, expected_match, result
+            "\n[Artist Test Failed]: {case_description}\n  - Jaccard: {jaccard_score:.4}\n  - Expected: {expected_match:?}, Actual: {result:?}"
         );
     }
 
@@ -425,37 +434,37 @@ mod tests {
     #[test]
     fn test_compare_duration_gaussian() {
         assert_eq!(
-            compare_duration(Some(180000), Some(180000)).unwrap(),
+            compare_duration(Some(180_000), Some(180_000)).unwrap(),
             DurationMatchType::Perfect,
             "Duration: Perfect"
         );
         assert_eq!(
-            compare_duration(Some(180000), Some(180250)).unwrap(),
+            compare_duration(Some(180_000), Some(180_250)).unwrap(),
             DurationMatchType::VeryHigh,
             "Duration: VeryHigh"
         );
         assert_eq!(
-            compare_duration(Some(180000), Some(180700)).unwrap(),
+            compare_duration(Some(180_000), Some(180_700)).unwrap(),
             DurationMatchType::High,
             "Duration: High (~sigma diff)"
         );
         assert_eq!(
-            compare_duration(Some(180000), Some(181000)).unwrap(),
+            compare_duration(Some(180_000), Some(181_000)).unwrap(),
             DurationMatchType::Medium,
             "Duration: Medium"
         );
         assert_eq!(
-            compare_duration(Some(180000), Some(181500)).unwrap(),
+            compare_duration(Some(180_000), Some(181_500)).unwrap(),
             DurationMatchType::Low,
             "Duration: Low"
         );
         assert_eq!(
-            compare_duration(Some(180000), Some(185000)).unwrap(),
+            compare_duration(Some(180_000), Some(185_000)).unwrap(),
             DurationMatchType::NoMatch,
             "Duration: NoMatch"
         );
         assert!(
-            compare_duration(Some(180000), None).is_none(),
+            compare_duration(Some(180_000), None).is_none(),
             "Duration: Handles None"
         );
     }
@@ -466,7 +475,7 @@ mod tests {
             title: Some("Perfect Song"),
             artists: Some(&["Artist A"]),
             album: Some("Perfect Album"),
-            duration: Some(180000),
+            duration: Some(180_000),
         };
         let perfect_result = SearchResult {
             title: "Perfect Song".to_string(),
@@ -475,7 +484,7 @@ mod tests {
                 ..Default::default()
             }],
             album: Some("Perfect Album".to_string()),
-            duration: Some(180000),
+            duration: Some(180_000),
             ..Default::default()
         };
         assert_eq!(
@@ -491,7 +500,7 @@ mod tests {
                 ..Default::default()
             }],
             album: Some("Perfect Album".to_string()),
-            duration: Some(180200),
+            duration: Some(180_200),
             ..Default::default()
         };
         assert_eq!(
@@ -519,7 +528,7 @@ mod tests {
                 ..Default::default()
             }],
             album: Some("Different Album".to_string()),
-            duration: Some(220000),
+            duration: Some(220_000),
             ..Default::default()
         };
         assert_eq!(
@@ -535,7 +544,7 @@ mod tests {
                 ..Default::default()
             }],
             album: Some("Another Album".to_string()),
-            duration: Some(120000),
+            duration: Some(120_000),
             ..Default::default()
         };
         assert_eq!(

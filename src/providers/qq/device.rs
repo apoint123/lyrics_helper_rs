@@ -2,11 +2,12 @@
 //!
 //! 负责创建、管理和缓存一个持久化的虚拟设备身份。
 //! 目的是让 API 请求看起来像是从一个真实的 QQ 音乐移动端 App 发出的。
-//! API 来源于 https://github.com/luren-dc/QQMusicApi
+//! API 来源于 <https://github.com/luren-dc/QQMusicApi>
 
 use rand::Rng;
 use rand::distr::Alphanumeric;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 use uuid::Uuid;
 
 /// 描述操作系统的版本信息。
@@ -87,20 +88,21 @@ impl Device {
     /// 创建一个新的随机设备。
     pub fn new() -> Self {
         let mut rng = rand::rng();
-        let android_id: String = (0..8)
-            .map(|_| rng.random::<u8>())
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let mut android_id = String::with_capacity(16);
+        for _ in 0..8 {
+            let byte = rng.random::<u8>();
+            let _ = write!(android_id, "{byte:02x}");
+        }
 
         Self {
-            display: format!("QMAPI.{}.001", rng.random_range(100000..999999)),
+            display: format!("QMAPI.{}.001", rng.random_range(100_000..999_999)),
             product: "iarim".to_string(),
             device: "sagit".to_string(),
             board: "eomam".to_string(),
             model: "MI 6".to_string(),
             fingerprint: format!(
                 "xiaomi/iarim/sagit:10/eomam.200122.001/{}:user/release-keys",
-                rng.random_range(1000000..9999999)
+                rng.random_range(1_000_000..9_999_999)
             ),
             boot_id: Uuid::new_v4().to_string(),
             proc_version: format!(
@@ -115,7 +117,7 @@ impl Device {
             imei: random_imei(),
             brand: "Xiaomi".to_string(),
             bootloader: "U-boot".to_string(),
-            base_band: "".to_string(),
+            base_band: String::new(),
             version: OsVersion {
                 incremental: "5891938".to_string(),
                 release: "10".to_string(),

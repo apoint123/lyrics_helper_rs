@@ -71,10 +71,12 @@ fn write_timed_tracks_to_head<W: std::io::Write>(
                     .any(|w| w.syllables.iter().any(|s| s.end_ms > s.start_ms))
                 {
                     let lang = track.metadata.get(&TrackMetadataKey::Language).cloned();
+                    let line_key = line_idx.try_into().unwrap_or(i32::MAX - p_key_counter_base)
+                        + p_key_counter_base;
                     grouped_by_lang
                         .entry(lang)
                         .or_default()
-                        .push((line_idx as i32 + p_key_counter_base, track));
+                        .push((line_key, track));
                 }
             }
         }
@@ -100,7 +102,7 @@ fn write_timed_tracks_to_head<W: std::io::Write>(
                     for (line_idx, track) in entries {
                         writer
                             .create_element("text")
-                            .with_attribute(("for", format!("L{}", line_idx).as_str()))
+                            .with_attribute(("for", format!("L{line_idx}").as_str()))
                             .write_inner_content(|writer| {
                                 for word in &track.words {
                                     for syl in &word.syllables {
@@ -170,10 +172,10 @@ fn generate_ttml_inner<W: std::io::Write>(
     metadata_store: &MetadataStore,
     options: &TtmlGenerationOptions,
 ) -> Result<(), ConvertError> {
+    const CHORUS_KEYWORDS: &[&str] = &["合", "合唱"];
+
     let mut agent_name_to_id_map: HashMap<String, String> = HashMap::new();
     let mut next_agent_num = 1;
-
-    const CHORUS_KEYWORDS: &[&str] = &["合", "合唱"];
 
     for line in lines {
         if let Some(agent_name) = line.agent.as_ref().filter(|s| !s.is_empty())
@@ -635,7 +637,9 @@ fn write_syllable_with_optional_splitting<W: std::io::Write>(
                 let first_char = token.chars().next().unwrap_or(' ');
                 match get_char_type(first_char) {
                     CharType::Latin | CharType::Numeric | CharType::Cjk => {
-                        token.chars().count() as f64
+                        let char_count = token.chars().count();
+                        let safe_count: u32 = char_count.try_into().unwrap_or(1_000_000);
+                        f64::from(safe_count)
                     }
                     CharType::Other => options.punctuation_weight,
                     CharType::Whitespace => 0.0,
@@ -645,7 +649,8 @@ fn write_syllable_with_optional_splitting<W: std::io::Write>(
 
         if total_weight > 0.0 {
             let total_duration = syl.end_ms.saturating_sub(syl.start_ms);
-            let duration_per_weight = total_duration as f64 / total_weight;
+            let safe_duration: u32 = total_duration.try_into().unwrap_or(2_000_000_000);
+            let duration_per_weight = f64::from(safe_duration) / total_weight;
 
             let mut current_token_start_ms = syl.start_ms;
             let mut accumulated_weight = 0.0;
@@ -660,16 +665,26 @@ fn write_syllable_with_optional_splitting<W: std::io::Write>(
 
                 let token_weight = match char_type {
                     CharType::Latin | CharType::Numeric | CharType::Cjk => {
-                        token.chars().count() as f64
+                        let char_count = token.chars().count();
+                        let safe_count: u32 = char_count.try_into().unwrap_or(1_000_000);
+                        f64::from(safe_count)
                     }
                     CharType::Other => options.punctuation_weight,
-                    _ => 0.0,
+                    CharType::Whitespace => 0.0,
                 };
 
                 accumulated_weight += token_weight;
 
-                let mut token_end_ms =
-                    syl.start_ms + (accumulated_weight * duration_per_weight).round() as u64;
+                let offset_ms = (accumulated_weight * duration_per_weight).round();
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let safe_offset = if (0.0..=1_000_000_000.0).contains(&offset_ms) {
+                    offset_ms as u64
+                } else if offset_ms > 1_000_000_000.0 {
+                    1_000_000_000
+                } else {
+                    0
+                };
+                let mut token_end_ms = syl.start_ms.saturating_add(safe_offset);
 
                 if Some(token_idx) == last_visible_token_index {
                     token_end_ms = syl.end_ms;
@@ -994,8 +1009,8 @@ mod tests {
 
     #[test]
     fn test_format_ttml_time() {
-        assert_eq!(format_ttml_time(3723456), "1:02:03.456");
-        assert_eq!(format_ttml_time(310100), "5:10.100");
+        assert_eq!(format_ttml_time(3_723_456), "1:02:03.456");
+        assert_eq!(format_ttml_time(310_100), "5:10.100");
         assert_eq!(format_ttml_time(7123), "7.123");
         assert_eq!(format_ttml_time(0), "0.000");
         assert_eq!(format_ttml_time(59999), "59.999");

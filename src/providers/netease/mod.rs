@@ -1,5 +1,5 @@
 //! 此模块实现了与网易云音乐平台进行交互的 `Provider`。
-//! API 来源于 https://github.com/NeteaseCloudMusicApiReborn/api
+//! API 来源于 <https://github.com/NeteaseCloudMusicApiReborn/api>
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -75,8 +75,8 @@ pub struct NeteaseClient {
 }
 
 impl NeteaseClient {
-    /// 创建一个新的 NeteaseClient 实例。
-    async fn new(config: ClientConfig) -> Result<Self> {
+    /// 创建一个新的 `NeteaseClient` 实例。
+    fn new(config: ClientConfig) -> Result<Self> {
         let weapi_secret_key = crypto::create_secret_key(16);
         let weapi_enc_sec_key = crypto::rsa_encode(
             &weapi_secret_key,
@@ -93,8 +93,8 @@ impl NeteaseClient {
     }
 
     /// 一个便捷的默认构造函数
-    pub async fn new_default() -> Result<Self> {
-        Self::new(ClientConfig::default()).await
+    pub fn new_default() -> Result<Self> {
+        Self::new(ClientConfig::default())
     }
 
     /// 辅助函数，用于发送加密的 WEAPI 请求。
@@ -181,23 +181,20 @@ impl NeteaseClient {
         let user_agent = get_user_agent(self.config.client_type);
 
         let header_obj = self.build_eapi_header();
-        let cookie_str = header_obj.as_object().map_or_else(
-            || "".to_string(),
-            |map| {
-                map.iter()
-                    .filter_map(|(k, v)| {
-                        v.as_str().and_then(|s| {
-                            if !s.is_empty() {
-                                Some(format!("{k}={s}"))
-                            } else {
-                                None
-                            }
-                        })
+        let cookie_str = header_obj.as_object().map_or_else(String::new, |map| {
+            map.iter()
+                .filter_map(|(k, v)| {
+                    v.as_str().and_then(|s| {
+                        if s.is_empty() {
+                            None
+                        } else {
+                            Some(format!("{k}={s}"))
+                        }
                     })
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            },
-        );
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        });
 
         let cookie_value = cookie_str
             .parse::<HeaderValue>()
@@ -296,7 +293,7 @@ impl Provider for NeteaseClient {
                 artists: song
                     .artist_info
                     .into_iter()
-                    .map(|a| crate::model::generic::Artist {
+                    .map(|a| generic::Artist {
                         id: a.id.to_string(),
                         name: a.name,
                     })
@@ -406,7 +403,10 @@ impl Provider for NeteaseClient {
             user_metadata_overrides: None,
         };
 
-        let mut parsed_data = converter::parse_and_merge(&conversion_input, &Default::default())?;
+        let mut parsed_data = converter::parse_and_merge(
+            &conversion_input,
+            &converter::types::ConversionOptions::default(),
+        )?;
         parsed_data.source_name = "netease".to_string();
 
         let raw_lyrics = RawLyrics {
@@ -439,10 +439,10 @@ impl Provider for NeteaseClient {
             LyricsHelperError::ApiError(format!("未能找到ID为 '{album_id}' 的专辑信息。"))
         })?;
 
-        let songs_to_map = if !response.songs.is_empty() {
-            response.songs
-        } else {
+        let songs_to_map = if response.songs.is_empty() {
             netease_album.songs
+        } else {
+            response.songs
         };
 
         let tracks = songs_to_map.into_iter().map(Into::into).collect();
@@ -566,7 +566,7 @@ impl Provider for NeteaseClient {
 
     async fn get_song_link(&self, song_id: &str) -> Result<String> {
         let url = "https://music.163.com/weapi/song/enhance/player/url";
-        let payload = json!({ "ids": format!("[{}]", song_id), "br": 999000, "csrf_token": "" });
+        let payload = json!({ "ids": format!("[{}]", song_id), "br": 999_000, "csrf_token": "" });
 
         let resp: models::SongUrlResult = self.post_weapi(url, &payload).await?;
 
@@ -668,7 +668,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_search_songs() {
-        let provider = NeteaseClient::new_default().await.unwrap();
+        let provider = NeteaseClient::new_default().unwrap();
 
         let search_track = Track {
             title: Some(TEST_SONG_NAME),
@@ -691,8 +691,7 @@ mod tests {
         });
         assert!(
             target_found,
-            "在搜索结果中未找到目标歌曲 '{} - {}'",
-            TEST_SONG_NAME, TEST_SINGER_NAME
+            "在搜索结果中未找到目标歌曲 '{TEST_SONG_NAME} - {TEST_SINGER_NAME}'"
         );
         println!("✅ 测试 search_songs 通过");
     }
@@ -700,7 +699,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_get_lyrics() {
-        let provider = NeteaseClient::new_default().await.unwrap();
+        let provider = NeteaseClient::new_default().unwrap();
         let lyrics = provider.get_lyrics(TEST_SONG_ID).await.unwrap();
 
         assert!(!lyrics.lines.is_empty(), "解析后的歌词行列表不应为空");
@@ -710,7 +709,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_get_album_info() {
-        let provider = NeteaseClient::new_default().await.unwrap();
+        let provider = NeteaseClient::new_default().unwrap();
         let album_info = provider.get_album_info(TEST_ALBUM_ID).await.unwrap();
 
         assert_eq!(album_info.name, "明天见");
@@ -723,7 +722,7 @@ mod tests {
     #[ignore]
     async fn test_get_playlist() {
         const NEW_SONGS_PLAYLIST_ID: &str = "3779629";
-        let provider = NeteaseClient::new_default().await.unwrap();
+        let provider = NeteaseClient::new_default().unwrap();
         let playlist = provider.get_playlist(NEW_SONGS_PLAYLIST_ID).await.unwrap();
 
         let songs = playlist.songs.as_ref().expect("歌单应包含歌曲列表");
@@ -737,7 +736,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_get_song_info() {
-        let provider = NeteaseClient::new_default().await.unwrap();
+        let provider = NeteaseClient::new_default().unwrap();
         let song = provider.get_song_info(TEST_SONG_ID).await.unwrap();
 
         assert_eq!(song.name, TEST_SONG_NAME);
@@ -751,22 +750,21 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_get_song_link() {
-        let provider = NeteaseClient::new_default().await.unwrap();
+        let provider = NeteaseClient::new_default().unwrap();
         let link_result = provider.get_song_link(TEST_SONG_ID).await;
 
         match link_result {
             Ok(link) => {
                 assert!(link.starts_with("http"), "返回的链接应以 http/https 开头");
-                println!("✅ 测试 get_song_link 通过: 获取到链接: {}", link);
+                println!("✅ 测试 get_song_link 通过: 获取到链接: {link}");
             }
             Err(e) => {
                 if let LyricsHelperError::ApiError(msg) = e {
                     println!(
-                        "✅ 测试 get_song_link 通过: 已正确处理接口错误 (如VIP或版权问题): {}",
-                        msg
+                        "✅ 测试 get_song_link 通过: 已正确处理接口错误 (如VIP或版权问题): {msg}"
                     );
                 } else {
-                    panic!("测试 get_song_link 因意外的非接口错误而失败: {:?}", e);
+                    panic!("测试 get_song_link 因意外的非接口错误而失败: {e:?}");
                 }
             }
         }
@@ -775,7 +773,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_get_album_cover_url() {
-        let provider = NeteaseClient::new_default().await.unwrap();
+        let provider = NeteaseClient::new_default().unwrap();
         let album_id = "182985259";
 
         let medium_cover_url = provider
@@ -784,7 +782,7 @@ mod tests {
             .expect("获取中等尺寸封面失败");
 
         assert!(medium_cover_url.contains("?param=400y400"));
-        println!("✅ 中等尺寸封面URL正确: {}", medium_cover_url);
+        println!("✅ 中等尺寸封面URL正确: {medium_cover_url}");
 
         let large_cover_url = provider
             .get_album_cover_url(album_id, CoverSize::Large)
@@ -792,7 +790,7 @@ mod tests {
             .expect("获取大尺寸封面失败");
 
         assert!(large_cover_url.contains("?param=800y800"));
-        println!("✅ 大尺寸封面URL正确: {}", large_cover_url);
+        println!("✅ 大尺寸封面URL正确: {large_cover_url}");
 
         let invalid_id_result = provider
             .get_album_cover_url("99999999999999999999999999999", CoverSize::Medium)
@@ -800,14 +798,14 @@ mod tests {
         assert!(invalid_id_result.is_err(), "无效的专辑ID应该返回错误");
         if let Err(e) = invalid_id_result {
             assert!(matches!(e, LyricsHelperError::ApiError(_)));
-            println!("✅ 成功捕获到预期的 ApiError 错误: {}", e);
+            println!("✅ 成功捕获到预期的 ApiError 错误: {e}");
         }
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_get_singer_songs() {
-        let provider = NeteaseClient::new_default().await.unwrap();
+        let provider = NeteaseClient::new_default().unwrap();
 
         let singer_id = "12138269";
         let limit = 5;
@@ -851,7 +849,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_get_album_songs() {
-        let provider = NeteaseClient::new_default().await.unwrap();
+        let provider = NeteaseClient::new_default().unwrap();
 
         let album_id = "182985259";
 

@@ -1,4 +1,8 @@
 #![warn(missing_docs)]
+#![warn(clippy::pedantic)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::ignore_without_reason)]
 
 //! # Lyrics Helper RS
 //!
@@ -28,7 +32,7 @@
 //!         album: None,
 //!         duration: None,
 //!     };
-//!     match helper.search_lyrics(track_to_search, SearchMode::Ordered) {
+//!     match helper.search_lyrics(&track_to_search, SearchMode::Ordered) {
 //!         Ok(future) => match future.await {
 //!             Ok(Some(lyrics)) => println!("获取歌词成功！共 {} 行。", lyrics.lyrics.parsed.lines.len()),
 //!             Ok(None) => println!("未找到任何可用的歌词。"),
@@ -66,7 +70,7 @@
 //!
 //! let options = ConversionOptions::default();
 //!
-//! match helper.convert_lyrics(input, &options) {
+//! match helper.convert_lyrics(&input, &options) {
 //!     Ok(ttml_output) => {
 //!         println!("转换成功！TTML 内容:\n{:?}", ttml_output);
 //!     }
@@ -86,6 +90,7 @@ pub mod wasm;
 
 use std::{
     collections::{HashMap, HashSet},
+    hash::BuildHasher,
     pin::Pin,
     sync::Arc,
 };
@@ -112,6 +117,7 @@ pub enum ProviderName {
 
 impl ProviderName {
     /// 获取提供商的字符串标识符
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::QQMusic => "qq",
@@ -121,7 +127,8 @@ impl ProviderName {
         }
     }
 
-    /// 从字符串标识符创建 ProviderName
+    /// 从字符串标识符创建 `ProviderName`
+    #[must_use]
     pub fn try_from_str(s: &str) -> Option<Self> {
         match s {
             "qq" => Some(Self::QQMusic),
@@ -133,6 +140,7 @@ impl ProviderName {
     }
 
     /// 获取所有支持的提供商
+    #[must_use]
     pub fn all() -> Vec<Self> {
         vec![
             Self::QQMusic,
@@ -143,6 +151,7 @@ impl ProviderName {
     }
 
     /// 获取提供商的显示名称
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::QQMusic => "QQ音乐",
@@ -163,7 +172,7 @@ impl std::str::FromStr for ProviderName {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Self::try_from_str(s).ok_or_else(|| format!("不支持的提供商: {}", s))
+        Self::try_from_str(s).ok_or_else(|| format!("不支持的提供商: {s}"))
     }
 }
 
@@ -202,31 +211,37 @@ pub enum SearchMode {
 
 impl SearchMode {
     /// 创建一个搜索特定提供商的模式
+    #[must_use]
     pub fn specific(provider: ProviderName) -> Self {
         SearchMode::Specific(provider)
     }
 
     /// 创建一个搜索提供商子集的模式
+    #[must_use]
     pub fn subset(providers: Vec<ProviderName>) -> Self {
         SearchMode::Subset(providers)
     }
 
     /// 创建一个只搜索网易云音乐的模式
+    #[must_use]
     pub const fn netease_only() -> Self {
         SearchMode::Specific(ProviderName::Netease)
     }
 
     /// 创建一个只搜索QQ音乐的模式
+    #[must_use]
     pub const fn qq_only() -> Self {
         SearchMode::Specific(ProviderName::QQMusic)
     }
 
     /// 创建一个只搜索酷狗音乐的模式
+    #[must_use]
     pub const fn kugou_only() -> Self {
         SearchMode::Specific(ProviderName::Kugou)
     }
 
     /// 创建一个只搜索AMLL TTML数据库的模式
+    #[must_use]
     pub const fn amll_only() -> Self {
         SearchMode::Specific(ProviderName::AmllTtmlDatabase)
     }
@@ -259,6 +274,7 @@ impl LyricsHelper {
     ///
     /// 此时实例只适用于歌词转换功能。
     /// 若要使用歌词搜索和下载功能，必须先调用 `load_providers()` 方法。
+    #[must_use]
     pub fn new() -> Self {
         Self {
             providers: Vec::new(),
@@ -281,13 +297,10 @@ impl LyricsHelper {
             >,
         >;
 
-        let amll_config = match config::load_amll_config() {
-            Ok(config) => config,
-            Err(e) => {
-                tracing::error!("[Main] 加载 AMLL 镜像配置失败: {}. 使用默认设置。", e);
-                config::AmllConfig::default()
-            }
-        };
+        let amll_config = config::load_amll_config().unwrap_or_else(|e| {
+            tracing::error!("[Main] 加载 AMLL 镜像配置失败: {}. 使用默认设置。", e);
+            config::AmllConfig::default()
+        });
 
         let initializers: Vec<Initializer<'_>> = vec![
             Box::pin(async {
@@ -299,9 +312,7 @@ impl LyricsHelper {
             Box::pin(async {
                 (
                     "NeteaseClient",
-                    NeteaseClient::new_default()
-                        .await
-                        .map(|p| Box::new(p) as Box<_>),
+                    NeteaseClient::new_default().map(|p| Box::new(p) as Box<_>),
                 )
             }),
             Box::pin(async {
@@ -347,16 +358,17 @@ impl LyricsHelper {
     ///
     /// # 返回
     /// 一个 `Result`，成功时包含一个 `Vec<SearchResult>`，该向量已按匹配度从高到低排序。
+    #[must_use]
     pub fn search_track<'a>(
         &self,
-        track_meta: Track<'a>,
+        track_meta: &Track<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<SearchResult>>> + Send + 'a>> {
         if self.providers.is_empty() {
             return Box::pin(async { Err(LyricsHelperError::ProvidersNotInitialized) });
         }
 
         let providers = self.providers.clone();
-        let track_meta = track_meta.to_owned();
+        let track_meta = track_meta.clone();
 
         Box::pin(async move {
             let search_futures = providers
@@ -366,7 +378,7 @@ impl LyricsHelper {
             let all_results: Vec<SearchResult> = future::join_all(search_futures)
                 .await
                 .into_iter()
-                .filter_map(std::result::Result::ok)
+                .filter_map(Result::ok)
                 .flatten()
                 .collect();
 
@@ -430,19 +442,19 @@ impl LyricsHelper {
     /// `Result<String>` - 成功时返回包含目标格式内容的字符串。
     pub fn convert_lyrics(
         &self,
-        input: ConversionInput,
+        input: &ConversionInput,
         options: &ConversionOptions,
     ) -> Result<FullConversionResult> {
         let options = options.clone();
-        Ok(converter::convert_single_lyric(&input, &options)?)
+        Ok(converter::convert_single_lyric(input, &options)?)
     }
 
     /// 从已解析的数据生成歌词，跳过解析步骤。
-    pub async fn generate_lyrics_from_parsed(
+    pub async fn generate_lyrics_from_parsed<S: BuildHasher + Send + 'static>(
         source_data: ParsedSourceData,
         target_format: LyricFormat,
         options: ConversionOptions,
-        user_metadata_overrides: Option<HashMap<String, Vec<String>>>,
+        user_metadata_overrides: Option<HashMap<String, Vec<String>, S>>,
     ) -> Result<FullConversionResult> {
         tokio::task::spawn_blocking(move || {
             converter::generate_from_parsed(
@@ -469,7 +481,7 @@ impl LyricsHelper {
     /// * `Err(LyricsHelperError)` - 如果在过程中发生不可恢复的错误。
     pub fn search_lyrics<'a>(
         &self,
-        track_meta: Track<'a>,
+        track_meta: &Track<'a>,
         mode: SearchMode,
     ) -> Result<SearchLyricsFuture<'a>> {
         if self.providers.is_empty() {
@@ -487,7 +499,7 @@ impl LyricsHelper {
             providers_to_search.len()
         );
 
-        let track_meta = track_meta.to_owned();
+        let track_meta = track_meta.clone();
 
         Ok(Box::pin(async move {
             match mode {
@@ -513,14 +525,14 @@ impl LyricsHelper {
     /// * `Err(LyricsHelperError)` - 如果发生错误。
     pub fn search_lyrics_comprehensive<'a>(
         &self,
-        track_meta: Track<'a>,
-        mode: SearchMode,
+        track_meta: &Track<'a>,
+        mode: &SearchMode,
     ) -> Result<SearchLyricsComprehensiveFuture<'a>> {
         if self.providers.is_empty() {
             return Err(LyricsHelperError::ProvidersNotInitialized);
         }
 
-        let providers_to_search = get_providers_for_mode(&self.providers, &mode)?;
+        let providers_to_search = get_providers_for_mode(&self.providers, mode)?;
         if providers_to_search.is_empty() {
             return Ok(Box::pin(async { Ok(None) }));
         }
@@ -531,7 +543,7 @@ impl LyricsHelper {
             providers_to_search.len()
         );
 
-        let track_meta = track_meta.to_owned();
+        let track_meta = track_meta.clone();
 
         Ok(Box::pin(async move {
             search_comprehensive_unified(&providers_to_search, &track_meta).await
@@ -546,6 +558,7 @@ impl LyricsHelper {
     /// # 返回
     /// * `Some(Vec<u8>)` - 成功获取到的封面数据
     /// * `None` - 所有候选项都无法提供封面
+    #[must_use]
     pub fn get_best_cover<'a>(
         &self,
         candidates: &'a [SearchResult],
@@ -612,7 +625,7 @@ impl LyricsHelper {
     }
 }
 
-/// 根据 SearchMode 筛选出要使用的提供商列表。
+/// 根据 `SearchMode` 筛选出要使用的提供商列表。
 fn get_providers_for_mode(
     all_providers: &[Arc<dyn Provider + Send + Sync>],
     mode: &SearchMode,
@@ -630,7 +643,7 @@ fn get_providers_for_mode(
             }
         }
         SearchMode::Subset(provider_names) => {
-            let name_strs: HashSet<_> = provider_names.iter().map(|p| p.as_str()).collect();
+            let name_strs: HashSet<_> = provider_names.iter().map(ProviderName::as_str).collect();
             let selected_providers: Vec<_> = all_providers
                 .iter()
                 .filter(|p| name_strs.contains(p.name()))
@@ -697,7 +710,7 @@ async fn search_ordered(
                 tracing::info!("在 '{}' 成功获取到歌词，搜索结束。", provider.name());
                 return Ok(Some(lyrics_result));
             }
-            Ok(None) => continue,
+            Ok(None) => {}
             Err(e) => return Err(e), // 发生网络错误等
         }
     }
@@ -716,7 +729,7 @@ async fn search_lyrics_parallel(
     let all_results: Vec<SearchResult> = future::join_all(search_futures)
         .await
         .into_iter()
-        .filter_map(std::result::Result::ok)
+        .filter_map(Result::ok)
         .flatten()
         .collect();
     let mut sorted_results = all_results;
@@ -767,7 +780,7 @@ async fn search_comprehensive_unified(
     let all_candidates: Vec<SearchResult> = future::join_all(search_futures)
         .await
         .into_iter()
-        .filter_map(std::result::Result::ok)
+        .filter_map(Result::ok)
         .flatten()
         .collect();
 
@@ -809,7 +822,6 @@ async fn search_comprehensive_unified(
                 }
                 Err(LyricsHelperError::LyricNotFound) => {
                     tracing::info!("候选项 '{}' 无歌词，尝试下一个。", candidate.title);
-                    continue;
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -817,7 +829,6 @@ async fn search_comprehensive_unified(
                         candidate.provider_name,
                         e
                     );
-                    continue;
                 }
             }
         }
@@ -864,7 +875,7 @@ mod integration_tests {
         };
 
         let search_results = helper
-            .search_track(track_to_search)
+            .search_track(&track_to_search)
             .await
             .expect("搜索歌曲失败");
 
@@ -958,7 +969,7 @@ mod integration_tests {
     async fn test_search_lyrics_ordered_mode() -> Result<()> {
         init_tracing();
         let mut helper = LyricsHelper::new();
-        helper.load_providers().await.unwrap();
+        helper.load_providers().await?;
 
         let track_to_search = Track {
             title: Some("风来的夏天"),
@@ -968,7 +979,7 @@ mod integration_tests {
         };
 
         let result = helper
-            .search_lyrics(track_to_search, SearchMode::Ordered)?
+            .search_lyrics(&track_to_search, SearchMode::Ordered)?
             .await?;
 
         assert!(result.is_some(), "顺序搜索应找到至少一个结果");
@@ -986,7 +997,7 @@ mod integration_tests {
     async fn test_search_lyrics_parallel_mode() -> Result<()> {
         init_tracing();
         let mut helper = LyricsHelper::new();
-        helper.load_providers().await.unwrap();
+        helper.load_providers().await?;
 
         let track_to_search = Track {
             title: Some("人海经过"),
@@ -996,7 +1007,7 @@ mod integration_tests {
         };
 
         let result = helper
-            .search_lyrics(track_to_search, SearchMode::Parallel)?
+            .search_lyrics(&track_to_search, SearchMode::Parallel)?
             .await?;
 
         assert!(result.is_some(), "并行搜索应找到至少一个结果");
@@ -1014,7 +1025,7 @@ mod integration_tests {
     async fn test_search_lyrics_specific_provider_mode() -> Result<()> {
         init_tracing();
         let mut helper = LyricsHelper::new();
-        helper.load_providers().await.unwrap();
+        helper.load_providers().await?;
 
         let track_to_search = Track {
             title: Some("星夏"),
@@ -1030,7 +1041,7 @@ mod integration_tests {
             provider_to_test.as_str()
         );
         let result = helper
-            .search_lyrics(track_to_search, SearchMode::Specific(provider_to_test))?
+            .search_lyrics(&track_to_search, SearchMode::Specific(provider_to_test))?
             .await?;
 
         assert!(result.is_some(), "在 AMLL TTML DB 中应能找到《星夏》");
@@ -1048,7 +1059,7 @@ mod integration_tests {
     async fn test_search_lyrics_subset_mode() -> Result<()> {
         init_tracing();
         let mut helper = LyricsHelper::new();
-        helper.load_providers().await.unwrap();
+        helper.load_providers().await?;
 
         let track_to_search = Track {
             title: Some("风来的夏天"),
@@ -1063,11 +1074,11 @@ mod integration_tests {
             "\n[INFO] 正在测试 [Subset] 模式 (提供商: {:?})",
             providers_to_test
                 .iter()
-                .map(|p| p.as_str())
+                .map(ProviderName::as_str)
                 .collect::<Vec<_>>()
         );
         let result = helper
-            .search_lyrics(track_to_search, SearchMode::Subset(providers_to_test))?
+            .search_lyrics(&track_to_search, SearchMode::Subset(providers_to_test))?
             .await?;
 
         assert!(result.is_some(), "在指定的提供商子集中应能找到歌词");

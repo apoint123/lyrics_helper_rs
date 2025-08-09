@@ -139,6 +139,7 @@ impl AmllTtmlDatabase {
     ///
     /// # 返回
     /// 返回一个包含所有匹配条目的 `Vec<IndexEntry>`。
+    #[must_use]
     pub fn search_by_field(&self, query: &str, field: &SearchField) -> Vec<IndexEntry> {
         if query.trim().is_empty() {
             return vec![];
@@ -225,7 +226,7 @@ impl Provider for AmllTtmlDatabase {
                         .cloned()
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|name| crate::model::generic::Artist {
+                        .map(|name| generic::Artist {
                             id: String::new(),
                             name,
                         })
@@ -255,7 +256,7 @@ impl Provider for AmllTtmlDatabase {
                     .cloned()
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|name| crate::model::generic::Artist {
+                    .map(|name| generic::Artist {
                         id: String::new(),
                         name,
                     })
@@ -292,12 +293,15 @@ impl Provider for AmllTtmlDatabase {
             },
             translations: vec![],
             romanizations: vec![],
-            target_format: Default::default(),
+            target_format: LyricFormat::default(),
             user_metadata_overrides: None,
         };
 
         let mut parsed_data = tokio::task::spawn_blocking(move || {
-            converter::parse_and_merge(&conversion_input, &Default::default())
+            converter::parse_and_merge(
+                &conversion_input,
+                &converter::types::ConversionOptions::default(),
+            )
         })
         .await
         .map_err(|e| LyricsHelperError::Parser(format!("TTML 解析失败: {e}")))?
@@ -418,10 +422,10 @@ async fn load_cached_index_head(cache_file_path: &Path) -> Result<Option<String>
     }
     let head = fs::read_to_string(&head_file_path).await?;
     let trimmed_head = head.trim();
-    Ok(if !trimmed_head.is_empty() {
-        Some(trimmed_head.to_string())
-    } else {
+    Ok(if trimmed_head.is_empty() {
         None
+    } else {
+        Some(trimmed_head.to_string())
     })
 }
 
@@ -589,7 +593,7 @@ mod tests {
         let (provider, entry) = create_test_provider();
         let song_id = &entry.raw_lyric_file;
 
-        println!("正在获取 id 为 {} 的歌词", song_id);
+        println!("正在获取 id 为 {song_id} 的歌词");
 
         let result = provider.get_full_lyrics(song_id).await;
 

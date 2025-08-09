@@ -22,7 +22,7 @@ static ASS_TIME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 
 /// 用于解析ASS文本中的 K 标签 `{\k[厘秒]}`
 static KARAOKE_TAG_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\{\\k([^}]+)\}").expect("编译 KARAOKE_TAG_REGEX 失败"));
+    LazyLock::new(|| Regex::new(r"\{\\k([^}]+)}").expect("编译 KARAOKE_TAG_REGEX 失败"));
 
 /// 用于解析ASS文件中 [Events] 部分的 Dialogue 或 Comment 行
 static ASS_LINE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -112,7 +112,11 @@ fn parse_karaoke_text(
         let text_slice = &text[current_char_pos..tag_match.start()];
         let syllable_duration_ms = u64::from(previous_duration_cs) * 10;
 
-        if !text_slice.is_empty() {
+        if text_slice.is_empty() {
+            // 如果上一个 \k 标签后没有内容（连续的 \k 标签）
+            // 同样将时长累加到时间流中
+            current_time_ms += syllable_duration_ms;
+        } else {
             // 如果内容是纯空格，则执行合并逻辑
             if text_slice.trim().is_empty() {
                 // 将这个纯空格音节的时长加到时间流中
@@ -147,10 +151,6 @@ fn parse_karaoke_text(
                 // 推进时间
                 current_time_ms = syllable_end_ms;
             }
-        } else {
-            // 如果上一个 \k 标签后没有内容（连续的 \k 标签）
-            // 同样将时长累加到时间流中
-            current_time_ms += syllable_duration_ms;
         }
 
         max_end_time_ms = max_end_time_ms.max(current_time_ms);
@@ -160,7 +160,10 @@ fn parse_karaoke_text(
 
     // 处理最后一个 `\k` 标签后的文本
     let remaining_text_slice = &text[current_char_pos..];
-    if !remaining_text_slice.is_empty() {
+    if remaining_text_slice.is_empty() {
+        max_end_time_ms =
+            max_end_time_ms.max(current_time_ms + u64::from(previous_duration_cs) * 10);
+    } else {
         let syllable_duration_ms = u64::from(previous_duration_cs) * 10;
 
         if remaining_text_slice.trim().is_empty() {
@@ -191,9 +194,6 @@ fn parse_karaoke_text(
             current_time_ms = syllable_end_ms;
         }
         max_end_time_ms = max_end_time_ms.max(current_time_ms);
-    } else {
-        max_end_time_ms =
-            max_end_time_ms.max(current_time_ms + u64::from(previous_duration_cs) * 10);
     }
 
     Ok((syllables, max_end_time_ms))
@@ -205,7 +205,7 @@ fn parse_actor(
     style: &str,
     line_num: usize,
     warnings: &mut Vec<String>,
-) -> Result<ParsedActorInfo, ConvertError> {
+) -> ParsedActorInfo {
     let mut actor_str = actor_str_input.to_string();
     let mut info = ParsedActorInfo::default();
 
@@ -266,7 +266,7 @@ fn parse_actor(
         ));
     }
 
-    Ok(info)
+    info
 }
 
 /// 解析ASS格式内容到 `ParsedSourceData` 结构。
@@ -324,7 +324,7 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
 
             let start_ms = parse_ass_time(&caps["Start"], subtitle_line_num)?;
             let actor_raw = &caps["Actor"];
-            let actor_info = parse_actor(actor_raw, style, subtitle_line_num, &mut warnings)?;
+            let actor_info = parse_actor(actor_raw, style, subtitle_line_num, &mut warnings);
 
             let style_lower = style.to_lowercase();
 
@@ -365,7 +365,7 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
 
                 let content_track = LyricTrack {
                     words,
-                    metadata: Default::default(),
+                    metadata: HashMap::default(),
                 };
 
                 let annotated_track = AnnotatedTrack {

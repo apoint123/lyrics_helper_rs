@@ -3,6 +3,9 @@
 use crate::converter::types::{ContentType, LyricLine, SyllableSmoothingOptions};
 
 /// 对歌词行应用平滑优化
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
+#[allow(clippy::cast_precision_loss)]
 pub fn apply_smoothing(lines: &mut [LyricLine], options: &SyllableSmoothingOptions) {
     // 因子必须在 (0, 0.5] 范围内。大于0.5可能导致数值不稳定。
     if options.smoothing_iterations == 0 || !(0.0..=0.5).contains(&options.factor) {
@@ -87,7 +90,9 @@ pub fn apply_smoothing(lines: &mut [LyricLine], options: &SyllableSmoothingOptio
                         let new_total_duration: f64 = durations.iter().sum();
                         if new_total_duration > 1e-6 {
                             let scale_factor = original_total_duration / new_total_duration;
-                            durations.iter_mut().for_each(|d| *d *= scale_factor);
+                            for d in &mut durations {
+                                *d *= scale_factor;
+                            }
                         }
 
                         let mut current_ms = original_start_ms;

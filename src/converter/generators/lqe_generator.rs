@@ -1,5 +1,7 @@
 //! # Lyricify Quick Export 格式生成器
 
+use std::fmt::Write;
+
 use crate::converter::{
     generators,
     processors::metadata_processor::MetadataStore,
@@ -30,11 +32,12 @@ pub fn generate_lqe(
         metadata_store.get_single_value(&crate::converter::types::CanonicalMetadataKey::Language);
     let lang_attr = main_lang.map_or("und", |s| s.as_str());
 
-    writer.push_str(&format!(
-        "[lyrics: format@{}, language@{}]\n",
+    writeln!(
+        writer,
+        "[lyrics: format@{}, language@{}]",
         options.main_lyric_format.to_extension_str(),
         lang_attr
-    ));
+    )?;
 
     let main_content = generate_sub_format(lines, metadata_store, options.main_lyric_format)?;
     writer.push_str(&main_content);
@@ -80,11 +83,12 @@ pub fn generate_lqe(
             })
             .map_or("und", |s| s.as_str());
 
-        writer.push_str(&format!(
-            "[translation: format@{}, language@{}]\n",
+        writeln!(
+            writer,
+            "[translation: format@{}, language@{}]",
             options.auxiliary_format.to_extension_str(),
             trans_lang
-        ));
+        )?;
 
         let translation_content =
             generate_sub_format(&translation_lines, metadata_store, options.auxiliary_format)?;
@@ -132,11 +136,12 @@ pub fn generate_lqe(
             })
             .map_or("romaji", |s| s.as_str());
 
-        writer.push_str(&format!(
-            "[pronunciation: format@{}, language@{}]\n",
+        writeln!(
+            writer,
+            "[pronunciation: format@{}, language@{}]",
             options.auxiliary_format.to_extension_str(),
             roma_lang
-        ));
+        )?;
 
         let romanization_content = generate_sub_format(
             &romanization_lines,

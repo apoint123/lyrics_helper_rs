@@ -8,12 +8,12 @@
 //! ## 致谢
 //!
 //! - Brad Conte 的原始 DES 实现。
-//! - LyricDecoder 项目针对 QQ 音乐的改编。
+//! - `LyricDecoder` 项目针对 QQ 音乐的改编。
 //!
-//! - Copyright (c) SuJiKiNen (LyricDecoder Project)
+//! - Copyright (c) `SuJiKiNen` (`LyricDecoder` Project)
 //! - Licensed under the MIT License.
 //!
-//! https://github.com/SuJiKiNen/LyricDecoder
+//! <https://github.com/SuJiKiNen/LyricDecoder>
 
 use crate::error::Result;
 
@@ -50,6 +50,8 @@ mod qrc_logic {
     const ROUNDS: usize = 16;
     const SUB_KEY_SIZE: usize = 6;
     type TripleDesKeySchedules = [[[u8; SUB_KEY_SIZE]; ROUNDS]; 3];
+
+    const DES_BLOCK_SIZE: usize = 8;
 
     /// 非标准 3DES 编解码器
     struct QqMusicCodec {
@@ -127,7 +129,6 @@ mod qrc_logic {
         let encrypted_bytes = decode(encrypted_hex_str)
             .map_err(|e| LyricsHelperError::Decryption(format!("无效的十六进制字符串: {e}")))?;
 
-        const DES_BLOCK_SIZE: usize = 8;
         if !encrypted_bytes.len().is_multiple_of(DES_BLOCK_SIZE) {
             return Err(LyricsHelperError::Decryption(format!(
                 "加密数据长度不是{DES_BLOCK_SIZE}的倍数",
@@ -159,7 +160,6 @@ mod qrc_logic {
             .finish()
             .map_err(|e| LyricsHelperError::Encryption(format!("Zlib压缩完成失败: {e}")))?;
 
-        const DES_BLOCK_SIZE: usize = 8;
         let padded_data = zero_pad(&compressed_data, DES_BLOCK_SIZE);
 
         let mut encrypted_data = vec![0; padded_data.len()];
@@ -326,6 +326,7 @@ mod qrc_logic {
         ];
 
         /// 生成 S-P 盒合并查找表。
+        #[allow(clippy::cast_possible_truncation)]
         fn generate_sp_tables() -> [[u32; 64]; 8] {
             let mut sp_tables = [[0u32; 64]; 8];
 
@@ -334,7 +335,7 @@ mod qrc_logic {
                     let s_box_index = calculate_sbox_index(s_box_input as u8);
                     let four_bit_output = S_BOXES[s_box_idx][s_box_index];
 
-                    let pre_p_box_val = (four_bit_output as u32) << (28 - (s_box_idx * 4));
+                    let pre_p_box_val = u32::from(four_bit_output) << (28 - (s_box_idx * 4));
 
                     sp_tables[s_box_idx][s_box_input] =
                         apply_qq_pbox_permutation(pre_p_box_val, &P_BOX);
@@ -379,7 +380,7 @@ mod qrc_logic {
 
         /// 对一个存储在 u32 高28位的密钥部分进行循环左移。
         const fn rotate_left_28bit_in_u32(value: u32, amount: u32) -> u32 {
-            const BITS_28_MASK: u32 = 0xFFFFFFF0;
+            const BITS_28_MASK: u32 = 0xFFFF_FFF0;
             ((value << amount) | (value >> (28 - amount))) & BITS_28_MASK
         }
 
@@ -394,7 +395,7 @@ mod qrc_logic {
         /// # 参数
         /// * `key` - 8字节的密钥数组。
         /// * `table` - 0-based 的位索引置换表。
-        fn permute_from_key_bytes(key: &[u8; 8], table: &[usize]) -> u64 {
+        fn permute_from_key_bytes(key: [u8; 8], table: &[usize]) -> u64 {
             let mut output = 0u64;
             let output_len = table.len();
 
@@ -436,7 +437,7 @@ mod qrc_logic {
                 let shift_amount = 32 - source_bit_pos;
                 let bit = (input >> shift_amount) & 1;
 
-                output |= (bit as u64) << (47 - i);
+                output |= u64::from(bit) << (47 - i);
             }
             output
         }
@@ -449,6 +450,7 @@ mod qrc_logic {
         /// * `key` - 8字节的DES密钥。
         /// * `schedule` - 一个可变的二维向量，用于存储生成的16个轮密钥，每个轮密钥是6字节（48位）。
         /// * `mode` - 加密 (`Encrypt`) 或解密 (`Decrypt`) 模式。解密时轮密钥的使用顺序相反。
+        #[allow(clippy::cast_possible_truncation)]
         pub(crate) fn key_schedule(key: &[u8], schedule: &mut [[u8; 6]; 16], mode: Mode) {
             // 每轮循环左移的位数表
             #[rustfmt::skip]
@@ -489,8 +491,8 @@ mod qrc_logic {
             let key_array: &[u8; 8] = key.try_into().expect("密钥必须是8字节");
 
             // 应用 PC-1
-            let c0 = permute_from_key_bytes(key_array, &KEY_PERM_C);
-            let d0 = permute_from_key_bytes(key_array, &KEY_PERM_D);
+            let c0 = permute_from_key_bytes(*key_array, &KEY_PERM_C);
+            let d0 = permute_from_key_bytes(*key_array, &KEY_PERM_D);
 
             // 将28位的结果左移4位，以匹配 `rotate_left_28bit_in_u32` 对高位对齐的期望。
             let mut c = (c0 as u32) << 4;
@@ -533,6 +535,7 @@ mod qrc_logic {
 
         impl DesPermutationTables {
             /// 创建并填充所有查找表
+            #[allow(clippy::cast_possible_truncation)]
             fn new() -> Self {
                 /// 初始置换规则。
                 #[rustfmt::skip]
@@ -569,10 +572,10 @@ mod qrc_logic {
                 }
 
                 /// 使用索引表执行一次置换
-                fn apply_permutation(input: &[u8; 8], rule: &[u8; 64]) -> u64 {
+                fn apply_permutation(input: [u8; 8], rule: &[u8; 64]) -> u64 {
                     let mut result: u64 = 0;
                     for (i, &src_bit) in rule.iter().enumerate() {
-                        let bit = get_bit(input, src_bit as usize);
+                        let bit = get_bit(&input, src_bit as usize);
                         result |= bit << (63 - i);
                     }
                     result
@@ -587,7 +590,7 @@ mod qrc_logic {
                     for byte_val in 0..256 {
                         input.fill(0);
                         input[byte_pos] = byte_val as u8;
-                        let permuted = apply_permutation(&input, &IP_RULE);
+                        let permuted = apply_permutation(input, &IP_RULE);
                         ip_table[byte_pos][byte_val] = ((permuted >> 32) as u32, permuted as u32);
                     }
                 }
@@ -598,7 +601,7 @@ mod qrc_logic {
                         let temp_input_u64: u64 = (block_val as u64) << (56 - (block_pos * 8));
                         let temp_input_bytes = temp_input_u64.to_be_bytes();
 
-                        let permuted = apply_permutation(&temp_input_bytes, &INV_IP_RULE);
+                        let permuted = apply_permutation(temp_input_bytes, &INV_IP_RULE);
 
                         *item = permuted;
                     }
@@ -681,7 +684,7 @@ mod qrc_logic {
         }
 
         /// 逆初始置换
-        fn inverse_permutation(state: &[u32; 2], output: &mut [u8]) {
+        fn inverse_permutation(state: [u32; 2], output: &mut [u8]) {
             let t = &TABLES.inv_ip_table;
             let mut result = 0u64;
             for (i, t_slice) in t.iter().enumerate() {
@@ -728,7 +731,7 @@ mod qrc_logic {
             state[0] ^= f_function(state[1], &key[15]);
 
             // 逆初始置换
-            inverse_permutation(&state, output);
+            inverse_permutation(state, output);
         }
     }
 }
@@ -756,7 +759,7 @@ mod tests {
         assert!(!decrypted_content.is_empty(), "解密后的内容为空字符串。");
 
         println!("\n✅ 解密成功！");
-        println!("{}", decrypted_content);
+        println!("{decrypted_content}");
     }
 
     #[test]
@@ -791,7 +794,7 @@ mod tests {
         for (i, round_key) in schedule.iter().enumerate() {
             print!("[");
             for (j, byte) in round_key.iter().enumerate() {
-                print!("0x{:02X}", byte);
+                print!("0x{byte:02X}");
                 if j < 5 {
                     print!(", ");
                 }

@@ -20,7 +20,7 @@ use crate::converter::{
 
 /// 用于匹配行时间标签，例如 [00:12.34]
 static LINE_TIME_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[(\d{2,}):(\d{2})[.:](\d{2,3})\]").unwrap());
+    LazyLock::new(|| Regex::new(r"\[(\d{2,}):(\d{2})[.:](\d{2,3})]").unwrap());
 /// 用于匹配逐字时间标签，例如 <00:12.34>
 static WORD_TIME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<(\d{2,}):(\d{2})[.:](\d{2,3})>").unwrap());
@@ -47,14 +47,11 @@ pub fn parse_enhanced_lrc(content: &str) -> Result<ParsedSourceData, ConvertErro
         }
 
         if let Some(line_time_match) = LINE_TIME_RE.find(line_str_trimmed) {
-            let line_start_ms = match parse_lrc_time_tag(line_time_match.as_str()) {
-                Ok(Some(time)) => time,
-                _ => {
-                    warnings.push(format!(
-                        "第 {line_num_one_based} 行: 无法解析行时间戳，已跳过。"
-                    ));
-                    continue;
-                }
+            let Ok(Some(line_start_ms)) = parse_lrc_time_tag(line_time_match.as_str()) else {
+                warnings.push(format!(
+                    "第 {line_num_one_based} 行: 无法解析行时间戳，已跳过。"
+                ));
+                continue;
             };
 
             let line_content = &line_str_trimmed[line_time_match.end()..];
@@ -166,7 +163,7 @@ fn parse_syllables_from_line(
         let raw_text_slice = &line_content[text_start..text_end];
 
         let ends_with_space = raw_text_slice.ends_with(' ');
-        let text = crate::converter::utils::normalize_text_whitespace(raw_text_slice);
+        let text = normalize_text_whitespace(raw_text_slice);
 
         if !text.is_empty() {
             let next_time = time_tags.get(i + 1).map(|t| t.0);

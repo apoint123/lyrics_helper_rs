@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 
 // 匹配 LYS 行首的属性标签，如 `[4]`
 static LYS_PROPERTY_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\[(\d+)\]").expect("编译 LYS_PROPERTY_REGEX 失败"));
+    LazyLock::new(|| Regex::new(r"^\[(\d+)]").expect("编译 LYS_PROPERTY_REGEX 失败"));
 
 /// 匹配 LYS 音节的时间戳，如 `(100,200)`
 static LYS_TIMESTAMP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -129,18 +129,16 @@ pub fn parse_lys(content: &str) -> Result<ParsedSourceData, ConvertError> {
                             .iter()
                             .any(|at| at.content_type == ContentType::Background);
 
-                        if !main_line_has_bg {
-                            if let Some(mut bg_track) = parsed_line.tracks.pop() {
-                                bg_track.content_type = ContentType::Background;
-                                main_line.tracks.push(bg_track);
-                            }
-                        } else {
+                        if main_line_has_bg {
                             // 如果主歌词行已有背景，则提升为新的主歌词行
                             warnings.push(format!(
                                 "第 {line_num} 行: 连续的背景行，将提升为新的主歌词行。"
                             ));
-                            parsed_line.agent = main_line.agent.clone();
+                            parsed_line.agent.clone_from(&main_line.agent);
                             lines.push(parsed_line);
+                        } else if let Some(mut bg_track) = parsed_line.tracks.pop() {
+                            bg_track.content_type = ContentType::Background;
+                            main_line.tracks.push(bg_track);
                         }
                     } else {
                         warnings.push(format!(
@@ -205,12 +203,12 @@ mod tests {
 
     #[test]
     fn test_parse_simple_main_lines() {
-        let content = r#"
+        let content = r"
         [ti:Test Title]
         [ar:Test Artist]
         [4]Hello(100,200) world(300,300)
         [5]Another(1000,200) line(1200,300)
-        "#;
+        ";
         let result = parse_lys(content).unwrap();
 
         assert_eq!(

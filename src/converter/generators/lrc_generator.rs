@@ -184,6 +184,7 @@ fn handle_end_time_output(
 ///
 /// # 返回
 /// `String` - 格式化后的 LRC 时间标签字符串。
+#[must_use]
 pub fn format_lrc_time_ms(ms: u64) -> String {
     let minutes = ms / 60000;
     let seconds = (ms % 60000) / 1000;

@@ -13,18 +13,18 @@ use pinyin::ToPinyin;
 use std::sync::LazyLock;
 use tracing::{error, warn};
 
-/// 使用 DashMap 来创建一个 OpenCC 实例缓存。
-/// 键是配置文件名 (e.g., "s2t.json")，值是对应的 OpenCC 实例。
+/// 使用 `DashMap` 来创建一个 `OpenCC` 实例缓存。
+/// 键是配置文件名 (e.g., "s2t.json")，值是对应的 `OpenCC` 实例。
 static CONVERTER_CACHE: LazyLock<DashMap<String, Arc<OpenCC>>> = LazyLock::new(DashMap::new);
 
-/// 根据指定的 OpenCC 配置转换文本。
+/// 根据指定的 `OpenCC` 配置转换文本。
 ///
-/// 此函数会缓存 OpenCC 实例。如果某个配置首次被请求，
+/// 此函数会缓存 `OpenCC` 实例。如果某个配置首次被请求，
 /// 它会被创建并存入缓存。后续对同一配置的请求将直接使用缓存的实例。
 ///
 /// # 参数
 /// * `text` - 需要转换的文本。
-/// * `config` - OpenCC 配置枚举。
+/// * `config` - `OpenCC` 配置枚举。
 ///
 /// # 返回
 /// 转换后的字符串。如果指定的配置加载失败，将打印错误日志并返回原始文本。
@@ -82,6 +82,7 @@ pub struct ChineseConversionProcessor;
 
 impl ChineseConversionProcessor {
     /// 创建一个新的处理器实例。
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -91,23 +92,22 @@ impl ChineseConversionProcessor {
     /// # 参数
     /// * `lines` - 一个可变的歌词行切片，转换结果将直接写入其中。
     /// * `options` - 简繁转换的配置选项，决定是否执行以及执行何种模式的转换。
-    pub fn process(&self, lines: &mut [LyricLine], options: &ChineseConversionOptions) {
+    pub fn process(lines: &mut [LyricLine], options: &ChineseConversionOptions) {
         let Some(config) = options.config else {
             return;
         };
 
         match options.mode {
             ChineseConversionMode::AddAsTranslation => {
-                self.add_as_translation(lines, config, options);
+                Self::add_as_translation(lines, config, options);
             }
             ChineseConversionMode::Replace => {
-                self.replace(lines, config);
+                Self::replace(lines, config);
             }
         }
     }
 
     fn add_as_translation(
-        &self,
         lines: &mut [LyricLine],
         config: BuiltinConfig,
         options: &ChineseConversionOptions,
@@ -126,7 +126,7 @@ impl ChineseConversionProcessor {
         };
 
         for line in lines.iter_mut() {
-            for at in line.tracks.iter_mut() {
+            for at in &mut line.tracks {
                 if at.content_type != ContentType::Main {
                     continue;
                 }
@@ -172,12 +172,12 @@ impl ChineseConversionProcessor {
         }
     }
 
-    fn replace(&self, lines: &mut [LyricLine], config: BuiltinConfig) {
+    fn replace(lines: &mut [LyricLine], config: BuiltinConfig) {
         for line in lines.iter_mut() {
-            for at in line.tracks.iter_mut() {
+            for at in &mut line.tracks {
                 if at.content_type == ContentType::Main {
                     let main_track = &mut at.content;
-                    for word in main_track.words.iter_mut() {
+                    for word in &mut main_track.words {
                         let original_syllable_texts: Vec<String> =
                             word.syllables.iter().map(|s| s.text.clone()).collect();
                         let full_word_text = original_syllable_texts.join("");
@@ -204,7 +204,7 @@ impl ChineseConversionProcessor {
                                 full_word_text, converted_full_text,
                             );
 
-                            for syllable in word.syllables.iter_mut() {
+                            for syllable in &mut word.syllables {
                                 if syllable.text.is_empty() {
                                     continue;
                                 }
@@ -308,28 +308,26 @@ mod tests {
 
     #[test]
     fn test_replace_mode_for_simple_line() {
-        let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_track_line("我是简体字。")];
         let options = ChineseConversionOptions {
             config: Some(BuiltinConfig::S2t),
             mode: ChineseConversionMode::Replace,
             ..Default::default()
         };
-        processor.process(&mut lines, &options);
+        ChineseConversionProcessor::process(&mut lines, &options);
         let main_track = &lines[0].tracks[0].content;
         assert_eq!(main_track.words[0].syllables[0].text, "我是簡體字。");
     }
 
     #[test]
     fn test_replace_mode_syllables_count_unchanged() {
-        let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_syllable_track_line(vec!["简体", "中文"])];
         let options = ChineseConversionOptions {
             config: Some(BuiltinConfig::S2t),
             mode: ChineseConversionMode::Replace,
             ..Default::default()
         };
-        processor.process(&mut lines, &options);
+        ChineseConversionProcessor::process(&mut lines, &options);
         let syllables: Vec<String> = lines[0].tracks[0].content.words[0]
             .syllables
             .iter()
@@ -340,7 +338,6 @@ mod tests {
 
     #[test]
     fn test_replace_mode_syllables_count_changed_fallback() {
-        let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_syllable_track_line(vec!["我的", "内存"])];
         let options = ChineseConversionOptions {
             config: Some(BuiltinConfig::S2twp), // "内存" -> "記憶體"
@@ -348,7 +345,7 @@ mod tests {
             ..Default::default()
         };
 
-        processor.process(&mut lines, &options);
+        ChineseConversionProcessor::process(&mut lines, &options);
 
         let syllables: Vec<String> = lines[0].tracks[0].content.words[0]
             .syllables
@@ -362,7 +359,6 @@ mod tests {
 
     #[test]
     fn test_add_translation_mode_success() {
-        let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_track_line("鼠标和键盘")];
         let options = ChineseConversionOptions {
             config: Some(BuiltinConfig::S2twp),
@@ -370,7 +366,7 @@ mod tests {
             target_lang_tag: None,
         };
 
-        processor.process(&mut lines, &options);
+        ChineseConversionProcessor::process(&mut lines, &options);
 
         assert_eq!(lines[0].tracks[0].translations.len(), 1);
         let translation_track = lines[0].tracks[0].translations.first().unwrap();
@@ -380,14 +376,13 @@ mod tests {
             translation_track
                 .metadata
                 .get(&TrackMetadataKey::Language)
-                .map(|s| s.as_str()),
+                .map(String::as_str),
             Some("zh-Hant-TW")
         );
     }
 
     #[test]
     fn test_add_translation_mode_skip_if_exists() {
-        let processor = ChineseConversionProcessor::new();
         let mut line = new_track_line("简体");
 
         let mut metadata = HashMap::new();
@@ -411,7 +406,7 @@ mod tests {
             mode: ChineseConversionMode::AddAsTranslation,
             target_lang_tag: Some("zh-Hant".to_string()),
         };
-        processor.process(&mut lines, &options);
+        ChineseConversionProcessor::process(&mut lines, &options);
         assert_eq!(lines[0].tracks[0].translations.len(), 1);
         let translation_text = lines[0].tracks[0].translations.first().unwrap().words[0].syllables
             [0]
@@ -422,14 +417,13 @@ mod tests {
 
     #[test]
     fn test_add_translation_mode_skip_if_config_is_none() {
-        let processor = ChineseConversionProcessor::new();
         let mut lines = vec![new_track_line("一些文字")];
         let options = ChineseConversionOptions {
             config: None,
             mode: ChineseConversionMode::AddAsTranslation,
             target_lang_tag: None,
         };
-        processor.process(&mut lines, &options);
+        ChineseConversionProcessor::process(&mut lines, &options);
         assert_eq!(lines[0].tracks[0].translations.len(), 0);
     }
 }

@@ -179,7 +179,7 @@ fn test_round_trip() {
     let mut metadata_store = MetadataStore::new();
     for (raw_key, values) in &parsed_data.raw_metadata {
         for value in values {
-            metadata_store.add(raw_key, value.clone()).unwrap();
+            metadata_store.add(raw_key, &value.clone()).unwrap();
         }
     }
 
@@ -557,7 +557,7 @@ fn test_parse_apple_music_timed_auxiliary_tracks() {
         .iter()
         .flat_map(|w| &w.syllables)
         .collect();
-      
+
     assert_eq!(bg_roman_syls.len(), 2);
     assert_eq!(bg_roman_syls[0].text, "heungmiroul");
     assert_eq!(bg_roman_syls[1].text, "ppun");

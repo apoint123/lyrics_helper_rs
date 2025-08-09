@@ -13,7 +13,7 @@ use regex::Regex;
 use std::{collections::HashMap, sync::LazyLock};
 
 static KANA_TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[kana:(?P<kana_stream>.*?)\]").expect("编译 KANA_TAG_REGEX 失败")
+    Regex::new(r"\[kana:(?P<kana_stream>.*?)]").expect("编译 KANA_TAG_REGEX 失败")
 });
 
 static LYRIC_TOKEN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -30,7 +30,7 @@ static HAS_KANJI_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\p{Han}").expect("编译 HAS_KANJI_REGEX 失败"));
 
 static QRC_LINE_TIMESTAMP_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\[\d+,\d+\]").expect("编译 QRC_LINE_TIMESTAMP_REGEX 失败"));
+    LazyLock::new(|| Regex::new(r"^\[\d+,\d+]").expect("编译 QRC_LINE_TIMESTAMP_REGEX 失败"));
 
 #[derive(Debug)]
 struct LyricToken {
@@ -51,6 +51,10 @@ struct MatchedWord {
 }
 
 /// 解析 QRC 格式内容到 `ParsedSourceData` 结构。
+///
+/// # Panics
+///
+/// 如果内部的 `KANA_TAG_REGEX` 被错误地修改，会触发 panic。
 pub fn parse_qrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
     let mut raw_metadata: HashMap<String, Vec<String>> = HashMap::new();
     let mut lyric_lines_str: Vec<&str> = Vec::new();
@@ -72,7 +76,10 @@ pub fn parse_qrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
     let lyric_content = lyric_lines_str.join("\n");
 
     if let Some(kana_caps) = KANA_TAG_REGEX.captures(&lyric_content) {
-        let kana_stream = kana_caps.name("kana_stream").unwrap().as_str();
+        let kana_stream = kana_caps
+            .name("kana_stream")
+            .expect("`kana_stream` 捕获组在正则匹配成功时必然存在")
+            .as_str();
         let (matched_words, warnings) = parse_furigana_qrc(&lyric_content, kana_stream)?;
 
         let lines = group_words_into_lines(matched_words);
@@ -84,7 +91,7 @@ pub fn parse_qrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
             ..Default::default()
         })
     } else {
-        parse_standard_qrc(&lyric_content, raw_metadata)
+        Ok(parse_standard_qrc(&lyric_content, raw_metadata))
     }
 }
 
@@ -136,11 +143,10 @@ fn parse_furigana_qrc(
                 lyric_idx += 1;
                 found_match_for_current_kana = true;
                 break;
-            } else {
-                // 不匹配
-                process_lyric_token(current_lyric, *line_idx, None, &mut matched_words);
-                lyric_idx += 1;
             }
+            // 不匹配
+            process_lyric_token(current_lyric, *line_idx, None, &mut matched_words);
+            lyric_idx += 1;
         }
 
         if !found_match_for_current_kana {
@@ -206,7 +212,7 @@ fn process_lyric_token(
     });
 }
 
-/// 将一个扁平化的 MatchedWord 列表按行号分组为 LyricLine 向量。
+/// 将一个扁平化的 `MatchedWord` 列表按行号分组为 `LyricLine` 向量。
 fn group_words_into_lines(matched_words: Vec<MatchedWord>) -> Vec<LyricLine> {
     let mut lines: Vec<LyricLine> = Vec::new();
     if matched_words.is_empty() {
@@ -384,7 +390,7 @@ fn parse_single_qrc_line(line_str: &str) -> Option<(LyricLine, bool)> {
 fn parse_standard_qrc(
     lyric_content: &str,
     raw_metadata: HashMap<String, Vec<String>>,
-) -> Result<ParsedSourceData, ConvertError> {
+) -> ParsedSourceData {
     let mut warnings: Vec<String> = Vec::new();
     let mut final_lines: Vec<LyricLine> = Vec::new();
     let mut pending_bg_line: Option<LyricLine> = None;
@@ -393,7 +399,17 @@ fn parse_standard_qrc(
     let parsed_lines_iter = lyric_content.lines().filter_map(parse_single_qrc_line);
 
     for (current_line, is_candidate) in parsed_lines_iter {
-        if !is_candidate {
+        if is_candidate {
+            if let Some(prev_bg_line) = pending_bg_line.take() {
+                warnings.push(format!(
+                    "行 '{}' 与另一背景人声行相邻，当作主歌词处理。",
+                    line_to_string(&prev_bg_line)
+                ));
+                final_lines.push(prev_bg_line);
+                last_pushed_was_candidate = true;
+            }
+            pending_bg_line = Some(current_line);
+        } else {
             if let Some(mut bg_line) = pending_bg_line.take() {
                 if let Some(last_line) = final_lines.last_mut() {
                     if let Some(track) = bg_line.tracks.first_mut() {
@@ -416,16 +432,6 @@ fn parse_standard_qrc(
             }
             final_lines.push(current_line);
             last_pushed_was_candidate = false;
-        } else {
-            if let Some(prev_bg_line) = pending_bg_line.take() {
-                warnings.push(format!(
-                    "行 '{}' 因与另一背景人声行相邻，当作主歌词处理。",
-                    line_to_string(&prev_bg_line)
-                ));
-                final_lines.push(prev_bg_line);
-                last_pushed_was_candidate = true;
-            }
-            pending_bg_line = Some(current_line);
         }
     }
 
@@ -433,11 +439,11 @@ fn parse_standard_qrc(
         if !last_pushed_was_candidate && let Some(last_line) = final_lines.last_mut() {
             if let Some(track) = bg_line.tracks.first_mut() {
                 track.content_type = ContentType::Background;
-            }
 
-            for word in &mut bg_line.tracks[0].content.words {
-                for syl in &mut word.syllables {
-                    syl.text = syl.text.trim_matches(['(', '（', ')', '）']).to_string();
+                for word in &mut track.content.words {
+                    for syl in &mut word.syllables {
+                        syl.text = syl.text.trim_matches(['(', '（', ')', '）']).to_string();
+                    }
                 }
             }
             last_line.tracks.push(bg_line.tracks.remove(0));
@@ -452,13 +458,13 @@ fn parse_standard_qrc(
 
     final_lines.sort_by_key(|line| line.start_ms);
 
-    Ok(ParsedSourceData {
+    ParsedSourceData {
         lines: final_lines,
         raw_metadata,
         warnings,
         source_format: LyricFormat::Qrc,
         ..Default::default()
-    })
+    }
 }
 
 #[cfg(test)]
@@ -522,14 +528,14 @@ mod tests {
 
     #[test]
     fn test_standard_qrc_background_vocals() {
-        let content = r#"
+        let content = r"
 [97648,4632]The (97648,384)scars (98032,565)of (98597,552)your (99149,581)love(99730,302)
 [96826,3715](You're (96826,333)gonna (97159,299)wish (97458,435)you)(100143,398)
 [102285,4362]They (102285,315)keep (102600,568)me (103168,568)thinking(103736,565)
 [107000,1000]Consecutive(107000,1000)
 [108000,1000](BG1)(108000,1000)
 [109000,1000](BG2)(109000,1000)
-    "#;
+    ";
         let result = parse_qrc(content).unwrap();
 
         assert_eq!(result.lines.len(), 5, "应有5行歌词");
@@ -567,11 +573,11 @@ mod tests {
         assert!(!bg_text1.starts_with('('), "背景歌词的括号应被移除");
 
         let line2 = &result.lines[1];
-        assert_eq!(line2.start_ms, 102285);
+        assert_eq!(line2.start_ms, 102_285);
         assert_eq!(line2.tracks.len(), 1, "第二行应只有1个轨道");
 
         let line4 = &result.lines[3];
-        assert_eq!(line4.start_ms, 108000);
+        assert_eq!(line4.start_ms, 108_000);
         assert_eq!(line4.tracks.len(), 1, "第四行应只有1个轨道");
         assert_eq!(
             line4.tracks[0].content_type,
@@ -586,7 +592,7 @@ mod tests {
         assert_eq!(text4, "(BG1)", "第四行作为普通行，内容应保留括号");
 
         let line5 = &result.lines[4];
-        assert_eq!(line5.start_ms, 109000);
+        assert_eq!(line5.start_ms, 109_000);
         assert_eq!(line5.tracks.len(), 1, "第五行应只有1个轨道");
         assert_eq!(
             line5.tracks[0].content_type,

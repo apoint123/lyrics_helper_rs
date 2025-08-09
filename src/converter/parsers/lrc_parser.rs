@@ -14,25 +14,26 @@ use crate::converter::{
 
 /// 用于匹配一个完整的 LRC 歌词行，捕获时间戳部分和文本部分
 static LRC_LINE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^((?:\[\d{2,}:\d{2}[.:]\d{2,3}\])+)(.*)$").expect("未能编译 LRC_LINE_REGEX")
+    Regex::new(r"^((?:\[\d{2,}:\d{2}[.:]\d{2,3}])+)(.*)$").expect("未能编译 LRC_LINE_REGEX")
 });
 
 /// 用于从一个时间戳组中提取出单个时间戳
 static LRC_TIMESTAMP_EXTRACT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[(\d{2,}):(\d{2})[.:](\d{2,3})\]").expect("未能编译 LRC_TIMESTAMP_EXTRACT_REGEX")
+    Regex::new(r"\[(\d{2,}):(\d{2})[.:](\d{2,3})]").expect("未能编译 LRC_TIMESTAMP_EXTRACT_REGEX")
 });
 
 const DEFAULT_LAST_LINE_DURATION_MS: u64 = 10000;
 
 /// 解析 LRC 格式内容到 `ParsedSourceData` 结构。
 pub fn parse_lrc(content: &str) -> Result<ParsedSourceData, ConvertError> {
-    let mut raw_metadata: HashMap<String, Vec<String>> = HashMap::new();
-    let mut warnings: Vec<String> = Vec::new();
-
     struct TempLrcEntry {
         timestamp_ms: u64,
         text: String,
     }
+
+    let mut raw_metadata: HashMap<String, Vec<String>> = HashMap::new();
+    let mut warnings: Vec<String> = Vec::new();
+
     let mut temp_entries: Vec<TempLrcEntry> = Vec::new();
 
     for (line_num, line_str) in content.lines().enumerate() {

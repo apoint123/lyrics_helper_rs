@@ -4,12 +4,12 @@
 //! ## 致谢
 //!
 //! 本模块的解密逻辑（包括固定的16字节密钥和异或算法）源于
-//! LyricDecoder 项目。
+//! `LyricDecoder` 项目。
 //!
-//! - Copyright (c) SuJiKiNen (LyricDecoder Project)
+//! - Copyright (c) `SuJiKiNen` (`LyricDecoder` Project)
 //! - Licensed under the MIT License.
 //!
-//! https://github.com/SuJiKiNen/LyricDecoder
+//! <https://github.com/SuJiKiNen/LyricDecoder>
 
 use std::io::Read;
 

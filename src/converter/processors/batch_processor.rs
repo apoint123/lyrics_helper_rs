@@ -3,6 +3,7 @@
 use std::{
     collections::HashMap,
     fs,
+    hash::BuildHasher,
     path::{Path, PathBuf},
 };
 
@@ -98,8 +99,8 @@ fn is_language_tag(tag: &str) -> bool {
 ///
 /// # 返回
 /// 一个元组 `(Vec<BatchConversionConfig>, HashMap<BatchFileId, BatchLoadedFile>)`
-pub fn create_batch_tasks(
-    file_groups: HashMap<String, FileGroup>,
+pub fn create_batch_tasks<S: BuildHasher>(
+    file_groups: HashMap<String, FileGroup, S>,
     target_format: LyricFormat,
 ) -> (
     Vec<BatchConversionConfig>,
@@ -156,9 +157,9 @@ pub fn create_batch_tasks(
 /// * `file_lookup` - 一个包含所有已加载文件信息的查找表。
 /// * `output_dir` - 保存转换后文件的目录。
 /// * `options` - 应用于所有转换的 `ConversionOptions`。
-pub fn execute_batch_conversion(
+pub fn execute_batch_conversion<S: BuildHasher>(
     tasks: &mut [BatchConversionConfig],
-    file_lookup: &HashMap<BatchFileId, BatchLoadedFile>,
+    file_lookup: &HashMap<BatchFileId, BatchLoadedFile, S>,
     output_dir: &Path,
     options: &ConversionOptions,
 ) -> Result<(), ConvertError> {
@@ -224,7 +225,7 @@ pub fn execute_batch_conversion(
             Ok(result_string) => {
                 let output_path = output_dir.join(&task.output_filename_preview);
                 match fs::write(&output_path, result_string) {
-                    Ok(_) => {
+                    Ok(()) => {
                         task.status = BatchEntryStatus::Completed {
                             output_path,
                             warnings: Vec::new(),

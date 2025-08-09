@@ -8,10 +8,11 @@ use crate::converter::{LyricLine, LyricSyllable};
 
 /// 辅助函数，用于安全地将偏移量应用到 u64 时间戳上
 fn offset_timestamp(timestamp: u64, offset: i64) -> u64 {
-    // 将 u64 时间戳转换为 i64 进行计算，以避免类型错误
-    // 使用 .max(0) 确保结果不会是负数（时间戳不能为负）
-    // 最后再安全地转换回 u64
-    (timestamp as i64 + offset).max(0) as u64
+    if offset >= 0 {
+        timestamp.saturating_add(offset.saturating_abs() as u64)
+    } else {
+        timestamp.saturating_sub(offset.saturating_abs() as u64)
+    }
 }
 
 /// 对歌词行向量应用一个时间偏移。
@@ -43,7 +44,7 @@ pub fn apply_offset(lines: &mut [LyricLine], offset_ms: i64) {
 }
 
 static METADATA_TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\[(?P<key>[a-zA-Z]+):(?P<value>.*)\]$").expect("编译 METADATA_TAG_REGEX 失败")
+    Regex::new(r"^\[(?P<key>[a-zA-Z]+):(?P<value>.*)]$").expect("编译 METADATA_TAG_REGEX 失败")
 });
 
 /// 尝试将一行文本解析为 LRC 风格的 `[key:value]` 元数据。
@@ -95,10 +96,10 @@ pub(crate) fn process_syllable_text(
         last_syllable.ends_with_space = true;
     }
 
-    if !clean_text.is_empty() {
-        Some((clean_text.to_string(), has_trailing_space))
-    } else {
+    if clean_text.is_empty() {
         None
+    } else {
+        Some((clean_text.to_string(), has_trailing_space))
     }
 }
 

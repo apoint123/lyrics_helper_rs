@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
         track_to_search.artists.unwrap_or_default().join(", ")
     );
 
-    let search_results = helper.search_track(track_to_search).await?;
+    let search_results = helper.search_track(&track_to_search).await?;
 
     if search_results.is_empty() {
         error!("在所有提供商中均未找到相关的歌词，程序退出。");
@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
 
     // 使用从 API 获取的 `SearchResult` 信息来覆盖元数据。
     info!("设置标题: {}", &selected_result.title);
-    metadata_store.set_single("title", selected_result.title.clone());
+    metadata_store.set_single("title", &selected_result.title.clone());
 
     info!("设置艺术家: {:?}", &selected_result.artists);
     metadata_store.set_multiple(
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
 
     if let Some(album) = &selected_result.album {
         info!("设置专辑: {}", album);
-        metadata_store.set_single("album", album.clone());
+        metadata_store.set_single("album", &album.clone());
     }
 
     info!("正在将歌词转换为 TTML 格式...");

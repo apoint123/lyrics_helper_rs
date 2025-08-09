@@ -15,8 +15,7 @@ use std::sync::LazyLock;
 
 /// 匹配 YRC 行级时间戳 `[start,duration]`
 static YRC_LINE_TIMESTAMP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\[(?P<start>\d+),(?P<duration>\d+)\]")
-        .expect("编译 YRC_LINE_TIMESTAMP_REGEX 失败")
+    Regex::new(r"^\[(?P<start>\d+),(?P<duration>\d+)]").expect("编译 YRC_LINE_TIMESTAMP_REGEX 失败")
 });
 
 /// 匹配 YRC 音节级时间戳 `(start,duration,0)`

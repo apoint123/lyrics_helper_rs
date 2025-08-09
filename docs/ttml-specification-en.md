@@ -168,11 +168,11 @@ When `itunes:timing="Word"`:
 
 In word-by-word mode, spaces between words (syllables) are **significant characters** and must be explicitly represented. The robot recognizes the following methods, with the latter two being the standard.
 
-| Method | Example | Compliance | Description |
-| :--- | :--- | :--- | :--- |
-| **Space inside `<span>`** | `<span begin="00:01.0" end="00:02.0">word </span>` | **Non-compliant, will be auto-corrected** | The robot will automatically extract leading or trailing spaces from the syllable. |
-| **Space outside `<span>`** | ` <span begin="00:01.0" end="00:02.0">word</span>  ` | **Most Compliant** | The space exists as an independent text node between two `<span>` tags. |
-| **Separate space `<span>`** | `<span begin="00:00.000" end="00:00.000"> </span>` | **Allowed** | It is allowed to create a separate `<span>` tag for a space. Recommend to set its begin and end times to `0`. |
+| Method                      | Example                                              | Compliance                                | Description                                                                                                   |
+|:----------------------------|:-----------------------------------------------------|:------------------------------------------|:--------------------------------------------------------------------------------------------------------------|
+| **Space inside `<span>`**   | `<span begin="00:01.0" end="00:02.0">word </span>`   | **Non-compliant, will be auto-corrected** | The robot will automatically extract leading or trailing spaces from the syllable.                            |
+| **Space outside `<span>`**  | ` <span begin="00:01.0" end="00:02.0">word</span>  ` | **Most Compliant**                        | The space exists as an independent text node between two `<span>` tags.                                       |
+| **Separate space `<span>`** | `<span begin="00:00.000" end="00:00.000"> </span>`   | **Allowed**                               | It is allowed to create a separate `<span>` tag for a space. Recommend to set its begin and end times to `0`. |
 
 #### 4.2. Line-by-Line Lyrics
 
@@ -226,18 +226,18 @@ You can directly provide a time value in seconds with an `s` suffix. This can be
 
 ##### **Summary of Valid Formats**
 
-| Category | Format | Example | Parsed Milliseconds |
-| :--- | :--- | :--- | :--- |
-| **Full Format** | `HH:MM:SS.fff` | `00:02:35.500` | `155500` |
-| | `HH:MM:SS.f` | `00:02:35.5` | `155500` |
-| | `HH:MM:SS` | `00:02:35` | `155000` |
-| **Omit Hours** | `MM:SS.ff` | `02:35.55` | `155550` |
-| | `MM:SS` | `02:35` | `155000` |
-| **Seconds Only** | `SS.fff` | `35.123` | `35123` |
-| | `SS` | `35` | `35000` |
-| | `SS` (over 60) | `95` | `95000` |
-| **`s` Suffix Format** | `f.f...s` | `15.8s` | `15800` |
-| | `fs` | `15s` | `15000` |
+| Category              | Format         | Example        | Parsed Milliseconds |
+|:----------------------|:---------------|:---------------|:--------------------|
+| **Full Format**       | `HH:MM:SS.fff` | `00:02:35.500` | `155500`            |
+|                       | `HH:MM:SS.f`   | `00:02:35.5`   | `155500`            |
+|                       | `HH:MM:SS`     | `00:02:35`     | `155000`            |
+| **Omit Hours**        | `MM:SS.ff`     | `02:35.55`     | `155550`            |
+|                       | `MM:SS`        | `02:35`        | `155000`            |
+| **Seconds Only**      | `SS.fff`       | `35.123`       | `35123`             |
+|                       | `SS`           | `35`           | `35000`             |
+|                       | `SS` (over 60) | `95`           | `95000`             |
+| **`s` Suffix Format** | `f.f...s`      | `15.8s`        | `15800`             |
+|                       | `fs`           | `15s`          | `15000`             |
 
 -----
 

@@ -18,6 +18,7 @@ pub struct MetadataStore {
 
 impl MetadataStore {
     /// 创建一个新的、空的 `MetadataStore` 实例。
+    #[must_use]
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
@@ -38,7 +39,7 @@ impl MetadataStore {
     pub fn add(
         &mut self,
         key_str: &str,
-        value: String,
+        value: &str,
     ) -> Result<(), ParseCanonicalMetadataKeyError> {
         let trimmed_value = value.trim();
         if trimmed_value.is_empty() {
@@ -66,7 +67,7 @@ impl MetadataStore {
     /// # 参数
     /// * `key_str` - 原始的元数据键名，例如 "title", "artist"。
     /// * `value` - 要设置的新值。
-    pub fn set_single(&mut self, key_str: &str, value: String) {
+    pub fn set_single(&mut self, key_str: &str, value: &str) {
         let canonical_key = key_str
             .parse::<CanonicalMetadataKey>()
             .unwrap_or_else(|_| CanonicalMetadataKey::Custom(key_str.to_string()));
@@ -96,16 +97,19 @@ impl MetadataStore {
     /// 获取指定元数据键的单个值。
     ///
     /// 如果一个键有多个值，此方法只返回第一个。
+    #[must_use]
     pub fn get_single_value(&self, key: &CanonicalMetadataKey) -> Option<&String> {
         self.data.get(key).and_then(|values| values.first())
     }
 
     /// 获取指定元数据键的所有值。
+    #[must_use]
     pub fn get_multiple_values(&self, key: &CanonicalMetadataKey) -> Option<&Vec<String>> {
         self.data.get(key)
     }
 
     /// 获取对所有元数据的不可变引用。
+    #[must_use]
     pub fn get_all_data(&self) -> &HashMap<CanonicalMetadataKey, Vec<String>> {
         &self.data
     }
@@ -123,8 +127,10 @@ impl MetadataStore {
     /// 3. 对每个键的值列表进行排序和去重。
     pub fn deduplicate_values(&mut self) {
         let mut keys_to_remove: Vec<CanonicalMetadataKey> = Vec::new();
-        for (key, values) in self.data.iter_mut() {
-            values.iter_mut().for_each(|v| *v = v.trim().to_string());
+        for (key, values) in &mut self.data {
+            for v in values.iter_mut() {
+                *v = v.trim().to_string();
+            }
             values.retain(|v| !v.is_empty());
 
             if values.is_empty() {
@@ -165,6 +171,7 @@ impl MetadataStore {
     /// - offset
     ///
     /// 有多个值的，使用 "/" 连接（offset 除外）。
+    #[must_use]
     pub fn generate_lrc_header(&self) -> String {
         let mut output = String::new();
         let mut written_keys: HashSet<&CanonicalMetadataKey> = HashSet::new();
@@ -204,7 +211,7 @@ impl MetadataStore {
     }
 }
 
-/// 实现从 ParsedSourceData 到 MetadataStore 的转换
+/// 实现从 `ParsedSourceData` 到 `MetadataStore` 的转换
 impl From<&ParsedSourceData> for MetadataStore {
     /// 从一个 `ParsedSourceData` 引用创建一个 `MetadataStore`。
     ///
@@ -214,7 +221,7 @@ impl From<&ParsedSourceData> for MetadataStore {
         for (key, values) in &parsed_data.raw_metadata {
             for value in values {
                 // 忽略错误，因为我们只是在构建一个临时的 store
-                let _ = store.add(key, value.clone());
+                let _ = store.add(key, value);
             }
         }
         store.deduplicate_values();

@@ -121,7 +121,7 @@ pub fn parse_lqe(
                 parsed_data,
                 current_block_lang,
             )),
-            _ => {}
+            ParseState::Header => {}
         }
     }
 
@@ -153,14 +153,14 @@ fn parse_section_header(header_line: &str) -> (LyricFormat, Option<String>) {
         .split_once(':')
         .and_then(|(_, rest)| rest.strip_suffix(']'))
     {
-        for param in params_str.split(',').map(|s| s.trim()) {
+        for param in params_str.split(',').map(str::trim) {
             if let Some((key, value)) = param.split_once('@') {
                 match key.trim() {
                     "format" => {
                         format = LyricFormat::from_string(value.trim()).unwrap_or_else(|| {
                             warn!("未知的 LQE 区块格式 '{}', 将回退到 LRC", value);
                             LyricFormat::Lrc
-                        })
+                        });
                     }
                     "language" => lang = Some(value.trim().to_string()),
                     _ => {}

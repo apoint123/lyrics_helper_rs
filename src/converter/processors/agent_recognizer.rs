@@ -47,20 +47,19 @@ pub fn recognize_agents(lines: &mut Vec<LyricLine>) {
                         // 更新当前演唱者，并跳过此行
                         current_agent = Some(name);
                         continue;
-                    } else {
-                        // 行模式: 标记和歌词在同一行。
-                        line.agent = Some(name.clone());
-                        current_agent = Some(name); // 更新当前演唱者以备后续行继承
-                        clean_text_in_main_track(&mut line, full_match_str);
                     }
+                    // 行模式: 标记和歌词在同一行。
+                    line.agent = Some(name.clone());
+                    current_agent = Some(name); // 更新当前演唱者以备后续行继承
+                    clean_text_in_main_track(&mut line, full_match_str);
                 }
             } else {
                 // 正则匹配成功，但未能提取出有效的演唱者名称（理论上不太可能发生）。
-                line.agent = current_agent.clone();
+                line.agent.clone_from(&current_agent);
             }
         } else {
             // 整行都不匹配演唱者标记的格式。
-            line.agent = current_agent.clone();
+            line.agent.clone_from(&current_agent);
         }
 
         processed_lines.push(line);
@@ -69,7 +68,7 @@ pub fn recognize_agents(lines: &mut Vec<LyricLine>) {
     *lines = processed_lines;
 }
 
-/// 辅助函数：从 LyricLine 中获取用于匹配的纯文本。
+/// 辅助函数：从 `LyricLine` 中获取用于匹配的纯文本。
 fn get_text_from_main_track(line: &LyricLine) -> Cow<'_, str> {
     if let Some(main_annotated_track) = line
         .tracks

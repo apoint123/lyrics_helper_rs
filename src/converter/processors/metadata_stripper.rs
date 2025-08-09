@@ -11,7 +11,7 @@ use tracing::{debug, trace, warn};
 
 use crate::converter::{
     LyricLine,
-    types::{ContentType, MetadataStripperOptions},
+    types::{ContentType, MetadataStripperFlags, MetadataStripperOptions},
 };
 
 type RegexCacheKey = (String, bool); // (pattern, case_sensitive)
@@ -47,7 +47,7 @@ fn get_cached_regex(pattern: &str, case_sensitive: bool) -> Option<Regex> {
     Some(regex_to_return)
 }
 
-/// 辅助函数：从 LyricLine 获取用于匹配的纯文本内容。
+/// 辅助函数：从 `LyricLine` 获取用于匹配的纯文本内容。
 fn get_plain_text_from_new_lyric_line(line: &LyricLine) -> String {
     if let Some(main_track) = line
         .tracks
@@ -71,7 +71,7 @@ pub fn strip_descriptive_metadata_lines(
     lines: &mut Vec<LyricLine>,
     options: &MetadataStripperOptions,
 ) {
-    if !options.enabled {
+    if !options.flags.contains(MetadataStripperFlags::ENABLED) {
         trace!("[MetadataStripper] 功能被禁用，跳过处理。");
         return;
     }
@@ -331,22 +331,23 @@ pub fn strip_descriptive_metadata_lines(
     ];
 
     // 根据选项决定是使用用户自定义的规则还是默认规则。
-    let keywords_to_use: Cow<'_, [String]> = options
-        .keywords
-        .as_ref()
-        .map(|v| Cow::Borrowed(v.as_slice()))
-        .unwrap_or_else(|| Cow::Owned(default_keywords.iter().map(|s| s.to_string()).collect()));
+    let keywords_to_use: Cow<'_, [String]> = options.keywords.as_ref().map_or_else(
+        || Cow::Owned(default_keywords.iter().map(|s| (*s).to_string()).collect()),
+        |v| Cow::Borrowed(v.as_slice()),
+    );
 
-    let regex_to_use: Cow<'_, [String]> = options
-        .regex_patterns
-        .as_ref()
-        .map(|v| Cow::Borrowed(v.as_slice()))
-        .unwrap_or_else(|| Cow::Owned(default_regex.iter().map(|s| s.to_string()).collect()));
+    let regex_to_use: Cow<'_, [String]> = options.regex_patterns.as_ref().map_or_else(
+        || Cow::Owned(default_regex.iter().map(|s| (*s).to_string()).collect()),
+        |v| Cow::Borrowed(v.as_slice()),
+    );
 
     // 如果没有规则，直接返回
     if lines.is_empty()
         || (keywords_to_use.is_empty()
-            && (!options.enable_regex_stripping || regex_to_use.is_empty()))
+            && (!options
+                .flags
+                .contains(MetadataStripperFlags::ENABLE_REGEX_STRIPPING)
+                || regex_to_use.is_empty()))
     {
         return;
     }
@@ -355,10 +356,13 @@ pub fn strip_descriptive_metadata_lines(
 
     // 基于关键词的移除
     if !keywords_to_use.is_empty() {
-        let prepared_keywords: Cow<'_, [String]> = if !options.keyword_case_sensitive {
-            Cow::Owned(keywords_to_use.iter().map(|k| k.to_lowercase()).collect())
-        } else {
+        let prepared_keywords: Cow<'_, [String]> = if options
+            .flags
+            .contains(MetadataStripperFlags::KEYWORD_CASE_SENSITIVE)
+        {
             keywords_to_use
+        } else {
+            Cow::Owned(keywords_to_use.iter().map(|k| k.to_lowercase()).collect())
         };
 
         let line_matches_keyword_rule = |line_to_check: &str| -> bool {
@@ -374,7 +378,10 @@ pub fn strip_descriptive_metadata_lines(
             }
 
             // 决定是否忽略大小写
-            let prepared_line: Cow<str> = if options.keyword_case_sensitive {
+            let prepared_line: Cow<str> = if options
+                .flags
+                .contains(MetadataStripperFlags::KEYWORD_CASE_SENSITIVE)
+            {
                 Cow::Borrowed(text_after_prefix)
             } else {
                 Cow::Owned(text_after_prefix.to_lowercase())
@@ -436,14 +443,24 @@ pub fn strip_descriptive_metadata_lines(
     }
 
     // 基于正则表达式的移除
-    if options.enable_regex_stripping && !regex_to_use.is_empty() && !lines.is_empty() {
+    if options
+        .flags
+        .contains(MetadataStripperFlags::ENABLE_REGEX_STRIPPING)
+        && !regex_to_use.is_empty()
+        && !lines.is_empty()
+    {
         let compiled_regexes: Vec<Regex> = regex_to_use
             .iter()
             .filter_map(|pattern_str| {
                 if pattern_str.trim().is_empty() {
                     return None;
                 }
-                get_cached_regex(pattern_str, options.regex_case_sensitive)
+                get_cached_regex(
+                    pattern_str,
+                    options
+                        .flags
+                        .contains(MetadataStripperFlags::REGEX_CASE_SENSITIVE),
+                )
             })
             .collect();
 

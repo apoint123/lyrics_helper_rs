@@ -2,7 +2,7 @@
 //!
 //! 该模块提供了与 QQ 音乐 API 交互的各种功能，
 //! 包括搜索、获取歌词、歌曲、专辑、歌手和播放列表信息。
-//! API 来源于 https://github.com/luren-dc/QQMusicApi
+//! API 来源于 <https://github.com/luren-dc/QQMusicApi>
 
 use std::{sync::LazyLock, time::Duration};
 
@@ -132,7 +132,7 @@ impl Provider for QQMusic {
 
             let process_song = |s: &models::Song| -> Option<SearchResult> {
                 let mut search_result = SearchResult::from(s);
-                search_result.provider_id = s.mid.clone();
+                search_result.provider_id.clone_from(&s.mid);
                 search_result.provider_name = self.name().to_string();
                 Some(search_result)
             };
@@ -162,7 +162,7 @@ impl Provider for QQMusic {
     /// 根据专辑 MID 获取专辑的详细信息。
     ///
     /// 注意：这个 API 不包含歌曲列表或歌曲总数，
-    /// 这些信息需要通过 get_album_songs 接口获取。
+    /// 这些信息需要通过 `get_album_songs` 接口获取。
     ///
     /// # 参数
     ///
@@ -422,19 +422,16 @@ impl QQMusic {
         const CACHE_FILENAME: &str = "qq_device.json";
         let http_client = Client::builder().timeout(Duration::from_secs(10)).build()?;
 
-        let device = match load_cached_config::<device::Device>(CACHE_FILENAME) {
-            Ok(config) => {
-                info!("已从缓存加载 QQ Device。");
-                config.data
+        let device = if let Ok(config) = load_cached_config::<device::Device>(CACHE_FILENAME) {
+            info!("已从缓存加载 QQ Device。");
+            config.data
+        } else {
+            info!("QQ Device 配置文件不存在或无效，将创建并保存一个新设备。");
+            let new_device = device::Device::new();
+            if let Err(e) = save_cached_config(CACHE_FILENAME, &new_device) {
+                warn!("保存新的 QQ Device 失败: {}", e);
             }
-            Err(_) => {
-                info!("QQ Device 配置文件不存在或无效，将创建并保存一个新设备。");
-                let new_device = device::Device::new();
-                if let Err(e) = save_cached_config(CACHE_FILENAME, &new_device) {
-                    warn!("保存新的 QQ Device 失败: {}", e);
-                }
-                new_device
-            }
+            new_device
         };
 
         let api_version = "13.2.5.8";
@@ -450,9 +447,9 @@ impl QQMusic {
 
     fn build_comm(&self) -> serde_json::Value {
         json!({
-            "cv": 13020508,
+            "cv": 13_020_508,
             "ct": 11,
-            "v": 13020508,
+            "v": 13_020_508,
             "QIMEI36": &self.qimei,
             "tmeAppID": "qqmusic",
             "inCharset": "utf-8",
@@ -640,7 +637,7 @@ impl QQMusic {
         Ok(results)
     }
 
-    /// 从解密后的 QRC 歌词文本中提取核心的 LyricContent 内容。
+    /// 从解密后的 QRC 歌词文本中提取核心的 `LyricContent` 内容。
     ///
     /// 这个函数会尝试修复文本中不规范的 XML 特殊字符。
     ///
@@ -649,7 +646,7 @@ impl QQMusic {
     ///
     /// # 返回
     /// * `String` - 提取出的 `LyricContent` 内容，或在某些情况下的原始文本。
-    fn extract_from_qrc_wrapper(&self, decrypted_text: &str) -> String {
+    fn extract_from_qrc_wrapper(decrypted_text: &str) -> String {
         if decrypted_text.is_empty() {
             return String::new();
         }
@@ -694,9 +691,9 @@ impl QQMusic {
         let lyric_result_container: models::LyricApiResult = serde_json::from_value(response_val)?;
         let lyric_resp = lyric_result_container.data;
 
-        let main_lyrics_decrypted = self.decrypt_with_fallback(&lyric_resp.lyric)?;
-        let trans_lyrics_decrypted = self.decrypt_with_fallback(&lyric_resp.trans)?;
-        let roma_lyrics_decrypted = self.decrypt_with_fallback(&lyric_resp.roma)?;
+        let main_lyrics_decrypted = Self::decrypt_with_fallback(&lyric_resp.lyric)?;
+        let trans_lyrics_decrypted = Self::decrypt_with_fallback(&lyric_resp.trans)?;
+        let roma_lyrics_decrypted = Self::decrypt_with_fallback(&lyric_resp.roma)?;
 
         let main_lyric_format = if main_lyrics_decrypted.starts_with("<?xml") {
             LyricFormat::Qrc
@@ -727,7 +724,7 @@ impl QQMusic {
         };
 
         let main_lyrics_content = if main_lyric_format == LyricFormat::Qrc {
-            self.extract_from_qrc_wrapper(&main_lyrics_decrypted)
+            Self::extract_from_qrc_wrapper(&main_lyrics_decrypted)
         } else {
             // 如果是 LRC 或其他格式，解密后的文本就是最终内容
             main_lyrics_decrypted.clone()
@@ -743,8 +740,7 @@ impl QQMusic {
             });
         }
 
-        let romanizations = self
-            .create_romanization_input(&roma_lyrics_decrypted)
+        let romanizations = Self::create_romanization_input(&roma_lyrics_decrypted)
             .into_iter()
             .collect();
 
@@ -762,7 +758,10 @@ impl QQMusic {
             target_format: LyricFormat::Lrc,
             user_metadata_overrides: None,
         };
-        let mut parsed_data = converter::parse_and_merge(&conversion_input, &Default::default())?;
+        let mut parsed_data = converter::parse_and_merge(
+            &conversion_input,
+            &converter::types::ConversionOptions::default(),
+        )?;
         parsed_data.source_name = "qq".to_string();
 
         let raw_lyrics = RawLyrics {
@@ -842,7 +841,7 @@ impl QQMusic {
     ///
     /// 优先尝试 Base64 解码，如果失败或结果不是有效的 UTF-8 字符串，
     /// 则回退到使用 DES 解密。
-    fn decrypt_with_fallback(&self, encrypted_str: &str) -> Result<String> {
+    fn decrypt_with_fallback(encrypted_str: &str) -> Result<String> {
         if let Ok(decoded_bytes) = BASE64_STANDARD.decode(encrypted_str)
             && let Ok(decoded_str) = String::from_utf8(decoded_bytes)
         {
@@ -852,19 +851,19 @@ impl QQMusic {
         qrc_codec::decrypt_qrc(encrypted_str)
     }
 
-    fn create_romanization_input(&self, roma_lyrics_decrypted: &str) -> Option<InputFile> {
+    fn create_romanization_input(roma_lyrics_decrypted: &str) -> Option<InputFile> {
         if roma_lyrics_decrypted.is_empty() {
             return None;
         }
 
-        let language_tag = self.detect_romanization_language(roma_lyrics_decrypted);
+        let language_tag = Self::detect_romanization_language(roma_lyrics_decrypted);
 
-        let content = self.extract_from_qrc_wrapper(roma_lyrics_decrypted);
+        let content = Self::extract_from_qrc_wrapper(roma_lyrics_decrypted);
 
         Some(InputFile {
             content,
             format: LyricFormat::Qrc,
-            language: language_tag,
+            language: Some(language_tag),
             filename: None,
         })
     }
@@ -873,11 +872,11 @@ impl QQMusic {
     /// 所以需要使用启发式规则检测罗马音的语言。
     ///
     /// 如果音节后带数字声调，则判定为粤语。否则视为日语。
-    fn detect_romanization_language(&self, roma_text: &str) -> Option<String> {
+    fn detect_romanization_language(roma_text: &str) -> String {
         if YUE_RE.is_match(roma_text).unwrap_or(false) {
-            Some("yue-Latn".to_string())
+            "yue-Latn".to_string()
         } else {
-            Some("ja-Latn".to_string())
+            "ja-Latn".to_string()
         }
     }
 }
@@ -895,7 +894,7 @@ fn get_qq_album_cover_url(album_mid: &str, size: QQMusicCoverSize) -> String {
     format!("https://y.gtimg.cn/music/photo_new/T002R{size_val}x{size_val}M000{album_mid}.jpg")
 }
 
-impl From<models::Singer> for generic::Artist {
+impl From<models::Singer> for Artist {
     fn from(qq_singer: models::Singer) -> Self {
         Self {
             id: qq_singer.mid.unwrap_or_default(),
@@ -936,7 +935,7 @@ impl From<models::AlbumInfo> for generic::Album {
                 .singer
                 .singer_list
                 .into_iter()
-                .map(|s| generic::Artist {
+                .map(|s| Artist {
                     id: s.mid,
                     name: s.name,
                 })
@@ -967,7 +966,7 @@ impl From<&models::Song> for SearchResult {
     fn from(s: &models::Song) -> Self {
         let language = match s.language {
             Some(9) => Some(Language::Instrumental),
-            Some(0) | Some(1) => Some(Language::Chinese),
+            Some(0 | 1) => Some(Language::Chinese),
             Some(3) => Some(Language::Japanese),
             Some(4) => Some(Language::Korean),
             Some(5) => Some(Language::English),

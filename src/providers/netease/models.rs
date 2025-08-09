@@ -1,5 +1,5 @@
 //! 此模块定义了所有用于反序列化网易云音乐 API 响应的 `struct` 数据结构。
-//! API 来源于 https://github.com/NeteaseCloudMusicApiReborn/api
+//! API 来源于 <https://github.com/NeteaseCloudMusicApiReborn/api>
 
 use serde::Deserialize;
 use serde_json::Value;

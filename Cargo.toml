@@ -61,6 +61,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 unicode-segmentation = "1.12.0"
 uuid = { version = "1", features = ["v4"] }
+bitflags = { version = "2.9.1", features = ["serde"] }
 
 [dev-dependencies]
 insta = { version = "1.43.1", features = ["yaml"] }

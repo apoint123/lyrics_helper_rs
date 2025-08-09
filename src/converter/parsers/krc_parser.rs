@@ -17,8 +17,7 @@ use std::sync::LazyLock;
 
 /// 匹配 KRC 行级时间戳 `[start,duration]`
 static KRC_LINE_TIMESTAMP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\[(?P<start>\d+),(?P<duration>\d+)\]")
-        .expect("编译 KRC_LINE_TIMESTAMP_REGEX 失败")
+    Regex::new(r"^\[(?P<start>\d+),(?P<duration>\d+)]").expect("编译 KRC_LINE_TIMESTAMP_REGEX 失败")
 });
 
 /// 匹配 KRC 音节级时间戳和文本 `<offset,duration,pitch>text`
@@ -29,8 +28,7 @@ static KRC_SYLLABLE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 
 // 匹配内嵌翻译的 language 标签
 static KRC_TRANSLATION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[language:(?P<base64>[A-Za-z0-9+/=]+)\]")
-        .expect("编译 KRC_TRANSLATION_REGEX 失败")
+    Regex::new(r"\[language:(?P<base64>[A-Za-z0-9+/=]+)]").expect("编译 KRC_TRANSLATION_REGEX 失败")
 });
 
 /// 解析 KRC 格式内容到 `ParsedSourceData` 结构。
@@ -57,7 +55,7 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
             let line_start_ms: u64 = line_caps["start"].parse()?;
             let line_duration_ms: u64 = line_caps["duration"].parse()?;
 
-            let content_after_line_ts = &trimmed_line[line_caps.get(0).unwrap().end()..];
+            let content_after_line_ts = &trimmed_line[line_caps.get(0).map_or(0, |m| m.end())..];
             let mut syllables: Vec<LyricSyllable> = Vec::new();
 
             for syl_caps in KRC_SYLLABLE_REGEX.captures_iter(content_after_line_ts) {
@@ -78,7 +76,9 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                 }
             }
 
-            if !syllables.is_empty() {
+            if syllables.is_empty() {
+                warnings.push(format!("第 {line_num} 行: 未找到任何有效的音节。"));
+            } else {
                 let main_content_track = LyricTrack {
                     words: vec![Word {
                         syllables: syllables.clone(),
@@ -175,8 +175,6 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                 });
 
                 aux_line_index += 1;
-            } else {
-                warnings.push(format!("第 {line_num} 行: 未找到任何有效的音节。"));
             }
         } else {
             warnings.push(format!("第 {line_num} 行: 未能识别的行格式。"));

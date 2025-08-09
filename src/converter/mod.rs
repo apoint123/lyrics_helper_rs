@@ -6,7 +6,7 @@ pub mod processors;
 pub mod types;
 pub mod utils;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::BuildHasher};
 
 pub use types::{
     FuriganaSyllable, LyricFormat, LyricLine, LyricSyllable, LyricTrack, TrackMetadataKey, Word,
@@ -99,11 +99,11 @@ pub fn convert_single_lyric(
 }
 
 /// 从已解析的源数据生成目标格式的歌词。
-pub fn generate_from_parsed(
+pub fn generate_from_parsed<S: BuildHasher>(
     mut source_data: ParsedSourceData,
     target_format: LyricFormat,
     options: &ConversionOptions,
-    user_metadata_overrides: &Option<HashMap<String, Vec<String>>>,
+    user_metadata_overrides: &Option<HashMap<String, Vec<String>, S>>,
 ) -> Result<FullConversionResult, ConvertError> {
     let mut metadata_store = MetadataStore::from(&source_data);
 
@@ -111,7 +111,10 @@ pub fn generate_from_parsed(
         for (key, values) in overrides {
             metadata_store.set_multiple(key, values.clone());
         }
-        source_data.raw_metadata = overrides.clone();
+        source_data.raw_metadata = overrides
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
     }
 
     metadata_store.deduplicate_values();
@@ -235,8 +238,7 @@ pub fn parse_and_merge(
         options.matching_strategy,
     );
 
-    let chinese_processor = ChineseConversionProcessor::new();
-    chinese_processor.process(&mut main_new_lines, &options.chinese_conversion);
+    ChineseConversionProcessor::process(&mut main_new_lines, &options.chinese_conversion);
 
     processors::metadata_stripper::strip_descriptive_metadata_lines(
         &mut main_new_lines,
@@ -255,23 +257,12 @@ pub fn merge_tracks(
     romanizations: &[(Vec<LyricLine>, ParsedSourceData, Option<String>)],
     strategy: types::AuxiliaryLineMatchingStrategy,
 ) {
-    if translations.is_empty() && romanizations.is_empty() {
-        return;
-    }
-
-    let tolerance_ms = match strategy {
-        types::AuxiliaryLineMatchingStrategy::SortedSync { tolerance_ms } => tolerance_ms,
-        _ => {
-            warn!("仅支持 'SortedSync' 合并策略，已回退到默认容差 20ms。");
-            20
-        }
-    };
-
     // 辅助函数：从源数据中提取带时间戳的内容轨道
     fn extract_content_tracks(
         sources: &[(Vec<LyricLine>, ParsedSourceData, Option<String>)],
     ) -> Vec<(u64, u64, LyricTrack)> {
         let mut timed_tracks = Vec::new();
+
         for (lines, _, lang) in sources {
             for line in lines {
                 // 辅助文件的一行理论上只包含一个带主要内容的 AnnotatedTrack
@@ -291,6 +282,18 @@ pub fn merge_tracks(
         timed_tracks.sort_by_key(|(start_ms, _, _)| *start_ms);
         timed_tracks
     }
+
+    if translations.is_empty() && romanizations.is_empty() {
+        return;
+    }
+
+    let tolerance_ms =
+        if let types::AuxiliaryLineMatchingStrategy::SortedSync { tolerance_ms } = strategy {
+            tolerance_ms
+        } else {
+            warn!("仅支持 'SortedSync' 合并策略，已回退到默认容差 20ms。");
+            20
+        };
 
     let translation_tracks = extract_content_tracks(translations);
     let romanization_tracks = extract_content_tracks(romanizations);
@@ -315,7 +318,7 @@ pub fn merge_tracks(
             }
             // 匹配并消耗所有在当前主行时间窗口内的翻译行
             while let Some((start_ms, end_ms, track)) = trans_iter.peek() {
-                if (*start_ms as i64 - main_line.start_ms as i64).unsigned_abs() <= tolerance_ms {
+                if start_ms.abs_diff(main_line.start_ms) <= tolerance_ms {
                     main_annotated_track.translations.push((*track).clone());
                     main_line.end_ms = main_line.end_ms.max(*end_ms);
                     trans_iter.next(); // 匹配成功, 消耗掉
@@ -335,7 +338,7 @@ pub fn merge_tracks(
                 }
             }
             while let Some((start_ms, end_ms, track)) = roman_iter.peek() {
-                if (*start_ms as i64 - main_line.start_ms as i64).unsigned_abs() <= tolerance_ms {
+                if start_ms.abs_diff(main_line.start_ms) <= tolerance_ms {
                     main_annotated_track.romanizations.push((*track).clone());
                     main_line.end_ms = main_line.end_ms.max(*end_ms);
                     roman_iter.next();

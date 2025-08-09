@@ -1,6 +1,6 @@
 //! 实现了与酷狗音乐平台进行交互的 `Provider`，
 //!
-//! API 来源于 https://github.com/MakcRe/KuGouMusicApi
+//! API 来源于 <https://github.com/MakcRe/KuGouMusicApi>
 //!
 //! # 使用流程
 //!
@@ -117,7 +117,7 @@ impl KugouMusic {
         }
     }
 
-    /// 创建一个新的 KugouMusic 提供商实例
+    /// 创建一个新的 `KugouMusic` 提供商实例
     async fn register_via_network() -> Result<Self> {
         let http_client = Client::new();
 
@@ -136,11 +136,11 @@ impl KugouMusic {
         params_for_sig.insert("clientver".to_string(), CLIENT_VER.to_string());
         params_for_sig.insert("clienttime".to_string(), clienttime.clone());
         params_for_sig.insert("dfid".to_string(), "-".to_string());
-        params_for_sig.insert("mid".to_string(), "".to_string());
-        params_for_sig.insert("uuid".to_string(), "".to_string());
+        params_for_sig.insert("mid".to_string(), String::new());
+        params_for_sig.insert("uuid".to_string(), String::new());
         params_for_sig.insert("userid".to_string(), "0".to_string());
         params_for_sig.insert("platid".to_string(), "4".to_string());
-        params_for_sig.insert("p.token".to_string(), "".to_string());
+        params_for_sig.insert("p.token".to_string(), String::new());
 
         let signature = signature::signature_register_params(&params_for_sig);
 
@@ -457,7 +457,7 @@ impl Provider for KugouMusic {
                     artists: song
                         .singers
                         .into_iter()
-                        .map(|singer| crate::model::generic::Artist {
+                        .map(|singer| generic::Artist {
                             id: singer.id.to_string(),
                             name: singer.name,
                         })
@@ -698,7 +698,7 @@ impl Provider for KugouMusic {
     }
 
     /// 根据歌手ID获取其单曲列表。
-    /// API: /kmr/v1/audio_group/author
+    /// API: /`kmr/v1/audio_group/author`
     #[instrument(skip(self))]
     async fn get_singer_songs(
         &self,
@@ -766,7 +766,7 @@ impl Provider for KugouMusic {
     }
 
     /// 此函数通过调用两个不同的API来组合完整的歌单信息。
-    /// 注意：此处的 playlist_id 必须是 global_collection_id (或称 gid)。
+    /// 注意：此处的 `playlist_id` 必须是 `global_collection_id` (或称 gid)。
     #[instrument(skip(self))]
     async fn get_playlist(&self, playlist_id: &str) -> Result<generic::Playlist> {
         // API 1: 获取歌单元数据 (/v3/get_list_info)
@@ -850,7 +850,7 @@ impl Provider for KugouMusic {
     }
 
     /// 根据歌曲Hash获取歌曲的详细信息。
-    /// API: /v2/get_res_privilege/lite
+    /// API: /`v2/get_res_privilege/lite`
     #[instrument(skip(self))]
     async fn get_song_info(&self, song_id: &str) -> Result<generic::Song> {
         let payload = models::SongDetailRequestPayload {
@@ -1210,7 +1210,7 @@ mod tests {
             "链接应以 http:// 或 https:// 开头"
         );
         assert!(
-            song_link.contains(".mp3") || song_link.contains("?"),
+            song_link.contains(".mp3") || song_link.contains('?'),
             "链接格式缺少 .mp3 或查询参数"
         );
     }
@@ -1324,7 +1324,7 @@ mod tests {
             },
             models::BatchImageDataItem {
                 hash: "69D45D31ADB5B9D58A70E4B7F9A4AA0B",
-                album_id: 146986426,
+                album_id: 146_986_426,
                 album_audio_id: 0,
             },
         ];

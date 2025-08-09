@@ -13,7 +13,7 @@ use crate::converter::{
 };
 
 static LYL_LINE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\[(\d+),(\d+)\](.*)$").expect("编译 LYL_LINE_REGEX 失败"));
+    LazyLock::new(|| Regex::new(r"^\[(\d+),(\d+)](.*)$").expect("编译 LYL_LINE_REGEX 失败"));
 
 /// 解析 LYL 格式内容到 `ParsedSourceData` 结构。
 pub fn parse_lyl(content: &str) -> Result<ParsedSourceData, ConvertError> {

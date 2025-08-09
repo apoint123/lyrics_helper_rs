@@ -4,7 +4,7 @@
 
 use crate::converter::{
     parsers::ttml_parser,
-    types::{ConvertError, ParsedSourceData},
+    types::{ConvertError, ParsedSourceData, TtmlParsingOptions},
 };
 use serde::Deserialize;
 
@@ -42,7 +42,7 @@ pub fn parse_apple_music_json(content: &str) -> Result<ParsedSourceData, Convert
             )
         })?;
 
-    let mut parsed_data = ttml_parser::parse_ttml(&ttml_string, &Default::default())?;
+    let mut parsed_data = ttml_parser::parse_ttml(&ttml_string, &TtmlParsingOptions::default())?;
 
     parsed_data
         .raw_metadata

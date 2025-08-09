@@ -1,5 +1,5 @@
 //! 此模块定义了所有用于反序列化酷狗音乐 API 响应的数据结构。
-//! API 来源于 https://github.com/MakcRe/KuGouMusicApi
+//! API 来源于 <https://github.com/MakcRe/KuGouMusicApi>
 
 use serde::{Deserialize, Serialize};
 
@@ -300,7 +300,7 @@ pub struct AlbumSongAudioInfo {
 
 // --- 请求模型 ---
 
-/// 用于请求歌手歌曲列表的 POST 请求体负载结构 (kmr/v1/audio_group/author)。
+/// 用于请求歌手歌曲列表的 POST 请求体负载结构 (`kmr/v1/audio_group/author`)。
 #[derive(Serialize)]
 pub struct KmrSingerSongsRequestPayload<'a> {
     /// 应用 ID。
@@ -327,7 +327,7 @@ pub struct KmrSingerSongsRequestPayload<'a> {
 
 // --- 响应模型 ---
 
-/// 歌手歌曲列表 API 的顶层响应结构 (kmr/v1/audio_group/author)。
+/// 歌手歌曲列表 API 的顶层响应结构 (`kmr/v1/audio_group/author`)。
 #[derive(Debug, Deserialize)]
 pub struct KmrSingerSongsResponse {
     /// API 状态码, 1 表示成功。
@@ -341,7 +341,7 @@ pub struct KmrSingerSongsResponse {
     pub data: Vec<KmrSongInfo>,
 }
 
-/// 代表一首歌曲的详细信息 (kmr/v1/audio_group/author)。
+/// 代表一首歌曲的详细信息 (`kmr/v1/audio_group/author`)。
 #[derive(Debug, Deserialize)]
 pub struct KmrSongInfo {
     /// 歌曲名。
@@ -581,7 +581,7 @@ pub struct SongUrlNewDataItem {
 /// `relate_goods` 数组中每个元素的结构。
 #[derive(Debug, Deserialize, Default)]
 pub struct RelateGoodsItem {
-    /// 包含 climax_info 的核心信息对象。
+    /// 包含 `climax_info` 的核心信息对象。
     pub info: GoodsInfo,
 }
 

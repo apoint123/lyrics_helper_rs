@@ -113,6 +113,32 @@ enum AuxTrackType {
     Romanization,
 }
 
+#[derive(Debug, Default)]
+enum MetadataContext {
+    #[default]
+    None, // 不在任何特殊元数据标签内
+    InAgent {
+        id: Option<String>,
+    },
+    InITunesMetadata,
+    InSongwriter,
+    InAuxiliaryContainer {
+        // 代表 <translations> 或 <transliterations>
+        aux_type: AuxTrackType,
+    },
+    InAuxiliaryEntry {
+        // 代表 <translation> 或 <transliteration>
+        aux_type: AuxTrackType,
+        lang: Option<String>,
+    },
+    InAuxiliaryText {
+        // 代表 <text>
+        aux_type: AuxTrackType,
+        lang: Option<String>,
+        key: Option<String>,
+    },
+}
+
 #[derive(Debug, Default, Clone)]
 struct AuxiliaryTrackSet {
     translations: Vec<LyricTrack>,
@@ -132,14 +158,7 @@ struct MetadataParseState {
     timed_track_map: HashMap<String, DetailedAuxiliaryTracks>,
     agent_id_to_name_map: HashMap<String, String>,
 
-    in_itunes_metadata: bool,
-    current_aux_type: Option<AuxTrackType>,
-    in_agent: bool,
-    current_agent_id: Option<String>,
-    in_text: bool,
-    in_songwriter: bool,
-    current_lang: Option<String>,
-    current_text_key: Option<String>,
+    context: MetadataContext,
     current_main_syllables: Vec<LyricSyllable>,
     current_bg_syllables: Vec<LyricSyllable>,
     current_plain_text: String,
@@ -353,21 +372,21 @@ fn handle_metadata_event(
     match event {
         Event::Start(e) => match e.name().as_ref() {
             TAG_AGENT | TAG_AGENT_TTM => {
-                meta_state.in_agent = true;
-                meta_state.current_agent_id = get_string_attribute(e, reader, &[ATTR_XML_ID])?;
+                let id = get_string_attribute(e, reader, &[ATTR_XML_ID])?;
+                meta_state.context = MetadataContext::InAgent { id };
             }
-            TAG_NAME | TAG_NAME_TTM if meta_state.in_agent => {
-                if let Some(id) = &meta_state.current_agent_id {
+            TAG_NAME | TAG_NAME_TTM => {
+                if let MetadataContext::InAgent { id: Some(agent_id) } = &meta_state.context {
                     let name = reader.read_text(e.name())?.into_owned();
                     if !name.trim().is_empty() {
                         let trimmed_name = name.trim().to_string();
                         meta_state
                             .agent_id_to_name_map
-                            .insert(id.clone(), trimmed_name.clone());
+                            .insert(agent_id.clone(), trimmed_name.clone());
                         raw_metadata
                             .entry("agent".to_string())
                             .or_default()
-                            .push(format!("{}={}", id, trimmed_name));
+                            .push(format!("{agent_id}={trimmed_name}"));
                     }
                 }
             }
@@ -384,57 +403,84 @@ fn handle_metadata_event(
                     }
                 }
             }
-            TAG_ITUNES_METADATA => meta_state.in_itunes_metadata = true,
-            TAG_SONGWRITER if meta_state.in_itunes_metadata => meta_state.in_songwriter = true,
-            TAG_TRANSLATIONS if meta_state.in_itunes_metadata => {
-                meta_state.current_aux_type = Some(AuxTrackType::Translation)
+            TAG_ITUNES_METADATA => meta_state.context = MetadataContext::InITunesMetadata,
+            TAG_SONGWRITER => {
+                if matches!(meta_state.context, MetadataContext::InITunesMetadata) {
+                    meta_state.context = MetadataContext::InSongwriter;
+                }
             }
-            TAG_TRANSLITERATIONS if meta_state.in_itunes_metadata => {
-                meta_state.current_aux_type = Some(AuxTrackType::Romanization)
+            TAG_TRANSLATIONS => {
+                if matches!(meta_state.context, MetadataContext::InITunesMetadata) {
+                    meta_state.context = MetadataContext::InAuxiliaryContainer {
+                        aux_type: AuxTrackType::Translation,
+                    };
+                }
             }
-            TAG_TRANSLATION | TAG_TRANSLITERATION if meta_state.current_aux_type.is_some() => {
-                meta_state.current_lang = get_string_attribute(e, reader, &[ATTR_XML_LANG])?;
+            TAG_TRANSLITERATIONS => {
+                if matches!(meta_state.context, MetadataContext::InITunesMetadata) {
+                    meta_state.context = MetadataContext::InAuxiliaryContainer {
+                        aux_type: AuxTrackType::Romanization,
+                    };
+                }
             }
-            TAG_TEXT if meta_state.current_aux_type.is_some() => {
-                meta_state.in_text = true;
-                meta_state.current_text_key = get_string_attribute(e, reader, &[ATTR_FOR])?;
-                meta_state.current_main_syllables.clear();
-                meta_state.current_bg_syllables.clear();
-                meta_state.current_plain_text.clear();
-                meta_state.span_stack.clear();
-                meta_state.text_buffer.clear();
+            TAG_TRANSLATION | TAG_TRANSLITERATION => {
+                if let MetadataContext::InAuxiliaryContainer { aux_type } = meta_state.context {
+                    let lang = get_string_attribute(e, reader, &[ATTR_XML_LANG])?;
+                    meta_state.context = MetadataContext::InAuxiliaryEntry { aux_type, lang };
+                }
             }
-            TAG_SPAN if meta_state.in_text => {
-                meta_state.text_buffer.clear();
+            TAG_TEXT => {
+                if let MetadataContext::InAuxiliaryEntry { aux_type, lang } = &meta_state.context {
+                    let key = get_string_attribute(e, reader, &[ATTR_FOR])?;
+                    meta_state.context = MetadataContext::InAuxiliaryText {
+                        aux_type: *aux_type,
+                        lang: lang.clone(),
+                        key,
+                    };
+                    meta_state.current_main_syllables.clear();
+                    meta_state.current_bg_syllables.clear();
+                    meta_state.current_plain_text.clear();
+                    meta_state.span_stack.clear();
+                    meta_state.text_buffer.clear();
+                }
+            }
+            TAG_SPAN => {
+                if matches!(meta_state.context, MetadataContext::InAuxiliaryText { .. }) {
+                    meta_state.text_buffer.clear();
 
-                let role =
-                    get_attribute_with_aliases(e, reader, &[ATTR_ROLE, ATTR_ROLE_ALIAS], |s| {
-                        Ok(match s.as_bytes() {
-                            ROLE_BACKGROUND => SpanRole::Background,
-                            _ => SpanRole::Generic,
-                        })
-                    })?
+                    let role = get_attribute_with_aliases(
+                        e,
+                        reader,
+                        &[ATTR_ROLE, ATTR_ROLE_ALIAS],
+                        |s| {
+                            Ok(match s.as_bytes() {
+                                ROLE_BACKGROUND => SpanRole::Background,
+                                _ => SpanRole::Generic,
+                            })
+                        },
+                    )?
                     .unwrap_or(SpanRole::Generic);
 
-                let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN])?;
-                let end_ms = get_time_attribute(e, reader, &[ATTR_END])?;
+                    let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN])?;
+                    let end_ms = get_time_attribute(e, reader, &[ATTR_END])?;
 
-                meta_state.span_stack.push(SpanContext {
-                    role,
-                    start_ms,
-                    end_ms,
-                    lang: None,
-                    scheme: None,
-                });
+                    meta_state.span_stack.push(SpanContext {
+                        role,
+                        start_ms,
+                        end_ms,
+                        lang: None,
+                        scheme: None,
+                    });
+                }
             }
             _ => {}
         },
         Event::Text(e) => {
             if !meta_state.span_stack.is_empty() {
                 meta_state.text_buffer.push_str(&e.xml_content()?);
-            } else if meta_state.in_text {
+            } else if matches!(meta_state.context, MetadataContext::InAuxiliaryText { .. }) {
                 meta_state.current_plain_text.push_str(&e.xml_content()?);
-            } else if meta_state.in_songwriter {
+            } else if matches!(meta_state.context, MetadataContext::InSongwriter) {
                 raw_metadata
                     .entry("songwriters".to_string())
                     .or_default()
@@ -443,23 +489,33 @@ fn handle_metadata_event(
         }
         Event::End(e) => match e.name().as_ref() {
             TAG_METADATA => state.in_metadata = false,
-            TAG_ITUNES_METADATA => meta_state.in_itunes_metadata = false,
-            TAG_SONGWRITER => meta_state.in_songwriter = false,
+            TAG_ITUNES_METADATA => meta_state.context = MetadataContext::None,
+            TAG_SONGWRITER => meta_state.context = MetadataContext::InITunesMetadata,
             TAG_AGENT | TAG_AGENT_TTM => {
-                if let Some(id) = meta_state.current_agent_id.take()
-                    && !meta_state.agent_id_to_name_map.contains_key(&id)
+                if let MetadataContext::InAgent { id: Some(agent_id) } = &meta_state.context
+                    && !meta_state.agent_id_to_name_map.contains_key(agent_id)
                 {
                     raw_metadata
                         .entry("agent".to_string())
                         .or_default()
-                        .push(id);
+                        .push(agent_id.clone());
                 }
-                meta_state.in_agent = false;
+                meta_state.context = MetadataContext::None;
             }
-            TAG_TRANSLATIONS | TAG_TRANSLITERATIONS => meta_state.current_aux_type = None,
-            TAG_TRANSLATION | TAG_TRANSLITERATION => meta_state.current_lang = None,
-            TAG_SPAN if meta_state.in_text => {
-                if let Some(ended_span_ctx) = meta_state.span_stack.pop() {
+            TAG_TRANSLATIONS | TAG_TRANSLITERATIONS => {
+                meta_state.context = MetadataContext::InITunesMetadata;
+            }
+            TAG_TRANSLATION | TAG_TRANSLITERATION => {
+                if let MetadataContext::InAuxiliaryEntry { aux_type, .. } = &meta_state.context {
+                    meta_state.context = MetadataContext::InAuxiliaryContainer {
+                        aux_type: *aux_type,
+                    };
+                }
+            }
+            TAG_SPAN => {
+                if matches!(meta_state.context, MetadataContext::InAuxiliaryText { .. })
+                    && let Some(ended_span_ctx) = meta_state.span_stack.pop()
+                {
                     let raw_text = std::mem::take(&mut meta_state.text_buffer);
 
                     if let (Some(start_ms), Some(end_ms)) =
@@ -494,11 +550,13 @@ fn handle_metadata_event(
                     }
                 }
             }
-            TAG_TEXT if meta_state.in_text => {
-                if let (Some(key), Some(aux_type)) = (
-                    meta_state.current_text_key.take(),
-                    meta_state.current_aux_type,
-                ) {
+            TAG_TEXT => {
+                if let MetadataContext::InAuxiliaryText {
+                    aux_type,
+                    lang,
+                    key: Some(text_key),
+                } = &meta_state.context
+                {
                     let trimmed_plain = meta_state.current_plain_text.trim();
                     let has_main_syllables = !meta_state.current_main_syllables.is_empty();
                     let has_bg_syllables = !meta_state.current_bg_syllables.is_empty();
@@ -507,19 +565,21 @@ fn handle_metadata_event(
                     if !has_main_syllables
                         && !has_bg_syllables
                         && !trimmed_plain.is_empty()
-                        && let AuxTrackType::Translation = aux_type
+                        && matches!(aux_type, AuxTrackType::Translation)
                     {
                         // 是逐行翻译，存入 translation_map。
-                        meta_state.translation_map.insert(
-                            key,
-                            (trimmed_plain.to_string(), meta_state.current_lang.clone()),
-                        );
+                        meta_state
+                            .translation_map
+                            .insert(text_key.clone(), (trimmed_plain.to_string(), lang.clone()));
                     } else if has_main_syllables || has_bg_syllables {
                         // 是带时间戳的辅助轨道，存入 timed_track_map。
-                        let entry = meta_state.timed_track_map.entry(key).or_default();
+                        let entry = meta_state
+                            .timed_track_map
+                            .entry(text_key.clone())
+                            .or_default();
                         let mut metadata = HashMap::new();
-                        if let Some(lang) = &meta_state.current_lang {
-                            metadata.insert(TrackMetadataKey::Language, lang.clone());
+                        if let Some(language) = lang {
+                            metadata.insert(TrackMetadataKey::Language, language.clone());
                         }
 
                         if has_main_syllables {
@@ -556,7 +616,14 @@ fn handle_metadata_event(
 
                     meta_state.current_plain_text.clear();
                 }
-                meta_state.in_text = false;
+                // 回到上一级上下文
+                if let MetadataContext::InAuxiliaryText { aux_type, lang, .. } = &meta_state.context
+                {
+                    meta_state.context = MetadataContext::InAuxiliaryEntry {
+                        aux_type: *aux_type,
+                        lang: lang.clone(),
+                    };
+                }
             }
             _ => {}
         },
@@ -704,8 +771,8 @@ fn handle_p_end(
 }
 
 /// 处理在 `<p>` 标签内部的事件。
-fn handle_p_event<'a>(
-    event: &Event<'a>,
+fn handle_p_event(
+    event: &Event<'_>,
     state: &mut TtmlParserState,
     reader: &Reader<&[u8]>,
     lines: &mut Vec<LyricLine>,
@@ -734,10 +801,10 @@ fn handle_p_event<'a>(
             if decoded_char != '\0'
                 && let Some(p_data) = state.body_state.current_p_element_data.as_mut()
             {
-                if !state.body_state.span_stack.is_empty() {
-                    state.text_buffer.push(decoded_char);
-                } else {
+                if state.body_state.span_stack.is_empty() {
                     p_data.line_text_accumulator.push(decoded_char);
+                } else {
+                    state.text_buffer.push(decoded_char);
                 }
             }
         }
@@ -867,7 +934,7 @@ fn process_span_start(
     {
         p_data.tracks_accumulator.push(AnnotatedTrack {
             content_type: ContentType::Background,
-            content: Default::default(),
+            content: LyricTrack::default(),
             translations: vec![],
             romanizations: vec![],
         });
@@ -955,13 +1022,18 @@ fn process_span_end(
         // 根据 span 的角色分发给不同的处理器
         match ended_span_ctx.role {
             SpanRole::Generic => {
-                handle_generic_span_end(state, &ended_span_ctx, &raw_text_from_buffer, warnings)?
+                handle_generic_span_end(state, &ended_span_ctx, &raw_text_from_buffer, warnings)?;
             }
             SpanRole::Translation | SpanRole::Romanization => {
-                handle_auxiliary_span_end(state, &ended_span_ctx, &raw_text_from_buffer)?
+                handle_auxiliary_span_end(state, &ended_span_ctx, &raw_text_from_buffer)?;
             }
             SpanRole::Background => {
-                handle_background_span_end(state, &ended_span_ctx, &raw_text_from_buffer, warnings)?
+                handle_background_span_end(
+                    state,
+                    &ended_span_ctx,
+                    &raw_text_from_buffer,
+                    warnings,
+                )?;
             }
         }
     }
@@ -1009,19 +1081,18 @@ fn handle_generic_span_end(
             ContentType::Main
         };
 
-        let annotated_track_idx = match p_data
+        let annotated_track_idx = if let Some(index) = p_data
             .tracks_accumulator
             .iter()
             .position(|t| t.content_type == target_content_type)
         {
-            Some(index) => index,
-            None => {
-                p_data.tracks_accumulator.push(AnnotatedTrack {
-                    content_type: target_content_type,
-                    ..Default::default()
-                });
-                p_data.tracks_accumulator.len() - 1
-            }
+            index
+        } else {
+            p_data.tracks_accumulator.push(AnnotatedTrack {
+                content_type: target_content_type,
+                ..Default::default()
+            });
+            p_data.tracks_accumulator.len() - 1
         };
 
         let target_content_track = &mut p_data.tracks_accumulator[annotated_track_idx].content;
@@ -1143,7 +1214,7 @@ fn handle_auxiliary_span_end(
 
         let mut aux_track = LyricTrack {
             words: vec![word],
-            metadata: Default::default(),
+            metadata: HashMap::default(),
         };
 
         match ctx.role {
@@ -1393,7 +1464,7 @@ fn parse_ttml_time_to_ms(time_str: &str) -> Result<u64, ConvertError> {
                 "无法解析时间戳 '{original_time_str}' 中的毫秒部分 '{ms_str}': {e}"
             ))
         })?;
-        Ok(val * 10u64.pow(3 - ms_str.len() as u32))
+        Ok(val * 10u64.pow(3 - u32::try_from(ms_str.len()).unwrap_or(3)))
     }
 
     // 解析 "SS.mmm" 或 "SS" 格式的字符串，返回秒和毫秒
@@ -1582,7 +1653,7 @@ fn attempt_recovery_from_error(
     error: &quick_xml::errors::Error,
 ) {
     let position = reader.error_position();
-    warnings.push(format!("TTML 格式错误，位置 {}: {}。", position, error));
+    warnings.push(format!("TTML 格式错误，位置 {position}: {error}。"));
 
     if state.body_state.in_p {
         // 错误发生在 <p> 标签内部
@@ -1628,10 +1699,10 @@ mod tests {
         assert_eq!(parse_ttml_time_to_ms("7.1s").unwrap(), 7100);
         assert_eq!(parse_ttml_time_to_ms("7.12s").unwrap(), 7120);
         assert_eq!(parse_ttml_time_to_ms("7.123s").unwrap(), 7123);
-        assert_eq!(parse_ttml_time_to_ms("99999.123s").unwrap(), 99999123);
-        assert_eq!(parse_ttml_time_to_ms("01:02:03.456").unwrap(), 3723456);
-        assert_eq!(parse_ttml_time_to_ms("05:10.1").unwrap(), 310100);
-        assert_eq!(parse_ttml_time_to_ms("05:10.12").unwrap(), 310120);
+        assert_eq!(parse_ttml_time_to_ms("99999.123s").unwrap(), 99_999_123);
+        assert_eq!(parse_ttml_time_to_ms("01:02:03.456").unwrap(), 3_723_456);
+        assert_eq!(parse_ttml_time_to_ms("05:10.1").unwrap(), 310_100);
+        assert_eq!(parse_ttml_time_to_ms("05:10.12").unwrap(), 310_120);
         assert_eq!(parse_ttml_time_to_ms("7.123").unwrap(), 7123);
         assert_eq!(parse_ttml_time_to_ms("7").unwrap(), 7000);
         assert_eq!(parse_ttml_time_to_ms("15.5s").unwrap(), 15500);
@@ -1640,9 +1711,9 @@ mod tests {
         assert_eq!(parse_ttml_time_to_ms("0").unwrap(), 0);
         assert_eq!(parse_ttml_time_to_ms("0.0s").unwrap(), 0);
         assert_eq!(parse_ttml_time_to_ms("00:00:00.000").unwrap(), 0);
-        assert_eq!(parse_ttml_time_to_ms("99:59:59.999").unwrap(), 359999999);
+        assert_eq!(parse_ttml_time_to_ms("99:59:59.999").unwrap(), 359_999_999);
         assert_eq!(parse_ttml_time_to_ms("60").unwrap(), 60000);
-        assert_eq!(parse_ttml_time_to_ms("123.456").unwrap(), 123456);
+        assert_eq!(parse_ttml_time_to_ms("123.456").unwrap(), 123_456);
 
         assert!(matches!(
             parse_ttml_time_to_ms("abc"),
@@ -1755,4 +1826,6 @@ mod tests {
             "no parentheses"
         );
     }
+
+    // 如果你期望看到集成测试，请前往 tests\ttml_parser_integration_tests.rs
 }

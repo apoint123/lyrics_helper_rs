@@ -47,7 +47,7 @@ pub trait Provider: Send + Sync {
     ) -> Result<Vec<SearchResult>>;
 
     ///
-    /// 根据歌曲 ID 获取已解析的的歌词，包括 ParsedSourceData 数据和原始副本。
+    /// 根据歌曲 ID 获取已解析的的歌词，包括 `ParsedSourceData` 数据和原始副本。
     ///
     /// 这是获取歌词的主要方法。
     ///
@@ -62,7 +62,7 @@ pub trait Provider: Send + Sync {
     ///
     /// 根据歌曲 ID 获取已解析的的歌词。
     ///
-    /// 一般在只需要 ParsedSourceData 数据的场景下使用。
+    /// 一般在只需要 `ParsedSourceData` 数据的场景下使用。
     ///
     /// # 参数
     /// * `song_id` - 特定于该提供商的歌曲 ID。

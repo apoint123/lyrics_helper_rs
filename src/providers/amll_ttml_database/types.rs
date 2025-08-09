@@ -36,7 +36,7 @@ impl IndexEntry {
         self.metadata
             .get(key)
             .and_then(|v| v.first())
-            .map(|s| s.as_str())
+            .map(String::as_str)
     }
 
     /// 辅助函数，方便地获取字符串向量类型的元数据值（如艺术家列表）。

@@ -1,7 +1,7 @@
 //! 本模块用于加密发送给网易云音乐 API 的请求。
 //! 本实现仅用于加密网易云音乐 API 请求，不应用于实际安全目的。
 //!
-//! 加密逻辑来源于 https://github.com/Binaryify/NeteaseCloudMusicApi
+//! 加密逻辑来源于 <https://github.com/Binaryify/NeteaseCloudMusicApi>
 
 use aes::{
     Aes128,

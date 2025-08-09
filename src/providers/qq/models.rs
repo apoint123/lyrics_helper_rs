@@ -1,5 +1,5 @@
 //! 此模块定义了所有用于反序列化 QQ 音乐 API 响应的数据结构。
-//! API 来源于 https://github.com/luren-dc/QQMusicApi
+//! API 来源于 <https://github.com/luren-dc/QQMusicApi>
 
 use serde::Deserialize;
 
@@ -68,6 +68,7 @@ pub enum SearchType {
 
 impl SearchType {
     /// 获取该搜索类型对应的整数值
+    #[must_use]
     pub fn as_u32(&self) -> u32 {
         match self {
             Self::Song => 0,
@@ -166,6 +167,7 @@ pub enum QQMusicCoverSize {
 
 impl QQMusicCoverSize {
     /// 将给定封面尺寸变体的像素大小以 `u32` 形式返回。
+    #[must_use]
     pub fn as_u32(&self) -> u32 {
         match self {
             Self::Size90 => 90,
@@ -327,14 +329,14 @@ pub struct FileInfo {
 // 歌手歌曲列表接口 ( musichall.song_list_server.GetSingerSongList ) 的模型
 // =================================================================
 
-/// 用于包装 GetSingerSongList API 响应的顶层容器。
+/// 用于包装 `GetSingerSongList` API 响应的顶层容器。
 #[derive(Debug, serde::Deserialize)]
 pub struct SingerSongListApiResult {
     /// 包含了核心业务数据的对象。
     pub data: SingerSongListResult,
 }
 
-/// 包含 GetSingerSongList API 核心响应数据的结构体。
+/// 包含 `GetSingerSongList` API 核心响应数据的结构体。
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SingerSongListResult {
@@ -420,14 +422,14 @@ pub struct ToplistSongData {
 // 歌单接口 ( c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg ) 的模型
 // =================================================================
 
-/// 用于包装 get_playlist_detail API 响应数据的顶层容器。
+/// 用于包装 `get_playlist_detail` API 响应数据的顶层容器。
 #[derive(Debug, serde::Deserialize)]
 pub struct PlaylistApiResult {
     /// 包含了核心歌单数据的对象。
     pub data: PlaylistDetailData,
 }
 
-/// 包含 get_playlist_detail API 核心响应数据的结构体。
+/// 包含 `get_playlist_detail` API 核心响应数据的结构体。
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistDetailData {
@@ -465,14 +467,14 @@ pub struct PlaylistDetailInfo {
 // 歌曲信息接口 ( music.pf_song_detail_svr.get_song_detail_yqq ) 的模型
 // =================================================================
 
-/// 用于包装 get_song_detail_yqq API 响应数据的顶层容器。
+/// 用于包装 `get_song_detail_yqq` API 响应数据的顶层容器。
 #[derive(Debug, serde::Deserialize)]
 pub struct SongDetailApiContainer {
     /// 包含了核心歌曲信息的对象。
     pub data: SongDetailApiResult,
 }
 
-/// 包含 get_song_detail_yqq API 核心响应数据的结构体。
+/// 包含 `get_song_detail_yqq` API 核心响应数据的结构体。
 #[derive(Debug, serde::Deserialize)]
 pub struct SongDetailApiResult {
     /// 包含了核心歌曲信息的对象。
@@ -505,6 +507,7 @@ pub enum SongFileType {
 
 impl SongFileType {
     /// 获取该文件类型对应的类型码和扩展名
+    #[must_use]
     pub fn get_parts(&self) -> (&str, &str) {
         match self {
             Self::Mp3_128 => ("M500", ".mp3"),
@@ -514,14 +517,14 @@ impl SongFileType {
     }
 }
 
-/// 用于包装 UrlGetVkey API 响应的顶层容器结构体。
+/// 用于包装 `UrlGetVkey` API 响应的顶层容器结构体。
 #[derive(Debug, serde::Deserialize)]
 pub struct SongUrlApiResult {
     /// 包含了核心业务数据的对象。
     pub data: SongUrlResult,
 }
 
-/// 包含 UrlGetVkey API 核心响应数据的结构体。
+/// 包含 `UrlGetVkey` API 核心响应数据的结构体。
 #[derive(Debug, serde::Deserialize)]
 pub struct SongUrlResult {
     /// 一个列表，其中每一项都包含了单首歌曲的链接信息。
@@ -532,14 +535,14 @@ pub struct SongUrlResult {
 // 歌词接口 ( music.musichallSong.PlayLyricInfo.GetPlayLyricInfo ) 的模型
 // =================================================================
 
-/// 用于包装 GetPlayLyricInfo API 响应的顶层容器。
+/// 用于包装 `GetPlayLyricInfo` API 响应的顶层容器。
 #[derive(Debug, serde::Deserialize)]
 pub struct LyricApiResult {
     /// 包含了核心歌词数据的对象。
     pub data: LyricApiResponse,
 }
 
-/// GetPlayLyricInfo API 响应的核心数据，包含加密的歌词字符串。
+/// `GetPlayLyricInfo` API 响应的核心数据，包含加密的歌词字符串。
 #[derive(Debug, serde::Deserialize)]
 pub struct LyricApiResponse {
     /// 加密的主歌词内容（QRC格式，Base64 编码）。

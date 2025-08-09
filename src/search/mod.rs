@@ -233,7 +233,7 @@ mod tests {
                         name: "Artist A".to_string(),
                     }],
                     album: Some("Album A".to_string()),
-                    duration: Some(240000), // 4:00
+                    duration: Some(240_000), // 4:00
                     provider_name: "provider_a".to_string(),
                     provider_id: "pa_perfect".to_string(),
                     ..Default::default()
@@ -246,7 +246,7 @@ mod tests {
                         name: "Artist A".to_string(),
                     }],
                     album: Some("Wrong Album".to_string()),
-                    duration: Some(300000), // 5:00
+                    duration: Some(300_000), // 5:00
                     provider_name: "provider_a".to_string(),
                     provider_id: "pa_high".to_string(),
                     ..Default::default()
@@ -259,7 +259,7 @@ mod tests {
                         name: "Artist A".to_string(),
                     }],
                     album: Some("Album A".to_string()),
-                    duration: Some(240000),
+                    duration: Some(240_000),
                     provider_name: "provider_a".to_string(),
                     provider_id: "pa_perfect".to_string(),
                     ..Default::default()
@@ -274,7 +274,7 @@ mod tests {
                         name: "Unknown Artist".to_string(),
                     }],
                     album: Some("Unknown Album".to_string()),
-                    duration: Some(180000), // 3:00
+                    duration: Some(180_000), // 3:00
                     provider_name: "provider_b".to_string(),
                     provider_id: "pb_low".to_string(),
                     ..Default::default()
@@ -287,7 +287,7 @@ mod tests {
                         name: "Different Artist".to_string(),
                     }],
                     album: Some("Different Album".to_string()),
-                    duration: Some(240000),
+                    duration: Some(240_000),
                     provider_name: "provider_b".to_string(),
                     provider_id: "pb_none".to_string(),
                     ..Default::default()

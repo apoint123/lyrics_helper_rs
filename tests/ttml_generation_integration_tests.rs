@@ -51,14 +51,8 @@ fn test_generate_line_timed_snapshot() {
         },
     ];
     let mut metadata = MetadataStore::new();
-    metadata.set_single(
-        &CanonicalMetadataKey::Title.to_string(),
-        "逐行歌曲".to_string(),
-    );
-    metadata.set_single(
-        &CanonicalMetadataKey::Artist.to_string(),
-        "测试艺术家".to_string(),
-    );
+    metadata.set_single(&CanonicalMetadataKey::Title.to_string(), "逐行歌曲");
+    metadata.set_single(&CanonicalMetadataKey::Artist.to_string(), "测试艺术家");
 
     let options = TtmlGenerationOptions {
         timing_mode: TtmlTimingMode::Line,
@@ -138,10 +132,7 @@ fn test_generate_word_timed_with_agents_snapshot() {
     ];
     let mut metadata = MetadataStore::new();
     metadata
-        .add(
-            &CanonicalMetadataKey::Songwriter.to_string(),
-            "作曲家1号".to_string(),
-        )
+        .add(&CanonicalMetadataKey::Songwriter.to_string(), "作曲家1号")
         .unwrap();
     let options = TtmlGenerationOptions {
         timing_mode: TtmlTimingMode::Word,

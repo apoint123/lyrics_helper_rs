@@ -24,7 +24,8 @@ fn format_ass_time(ms: u64) -> String {
 
 /// 将毫秒时长四舍五入到厘秒 (cs)，用于 ASS 的 `\k` 标签。
 fn round_duration_to_cs(duration_ms: u64) -> u32 {
-    ((duration_ms + 5) / 10) as u32
+    let cs = (duration_ms + 5) / 10;
+    cs.try_into().unwrap_or(u32::MAX)
 }
 
 /// ASS 生成的主入口函数。
@@ -214,22 +215,22 @@ fn build_karaoke_text(words: &[Word]) -> Result<String, ConvertError> {
     for syl in syllables {
         // 计算音节间的间隙
         if syl.start_ms > previous_syllable_end_ms {
-            let gap_cs = round_duration_to_cs(syl.start_ms - previous_syllable_end_ms);
-            if gap_cs > 0 {
-                write!(text_builder, "{{\\k{gap_cs}}}")?;
+            let gap_centiseconds = round_duration_to_cs(syl.start_ms - previous_syllable_end_ms);
+            if gap_centiseconds > 0 {
+                write!(text_builder, "{{\\k{gap_centiseconds}}}")?;
             }
         }
 
         // 计算音节本身的时长
-        let syl_duration_ms = syl.end_ms.saturating_sub(syl.start_ms);
-        let mut syl_duration_cs = round_duration_to_cs(syl_duration_ms);
+        let syllable_duration_ms = syl.end_ms.saturating_sub(syl.start_ms);
+        let mut syllable_cs = round_duration_to_cs(syllable_duration_ms);
         // 对于非常短的音节，确保其至少有1cs
-        if syl_duration_cs == 0 && syl_duration_ms > 0 {
-            syl_duration_cs = 1;
+        if syllable_cs == 0 && syllable_duration_ms > 0 {
+            syllable_cs = 1;
         }
 
-        if syl_duration_cs > 0 {
-            write!(text_builder, "{{\\k{syl_duration_cs}}}")?;
+        if syllable_cs > 0 {
+            write!(text_builder, "{{\\k{syllable_cs}}}")?;
         }
 
         text_builder.push_str(&syl.text);

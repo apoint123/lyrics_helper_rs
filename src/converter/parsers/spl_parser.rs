@@ -17,7 +17,7 @@ static SPL_LEADING_TIMESTAMPS_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^((\[\d{1,3}:\d{1,2}\.\d{1,6}])+)(.*)$").unwrap());
 /// 在任意位置查找一个时间戳（方括号 `[]` 或尖括号 `<>`）
 static SPL_ANY_TIMESTAMP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[(\d{1,3}:\d{1,2}\.\d{1,6})\]|<(\d{1,3}:\d{1,2}\.\d{1,6})>").unwrap()
+    Regex::new(r"\[(\d{1,3}:\d{1,2}\.\d{1,6})]|<(\d{1,3}:\d{1,2}\.\d{1,6})>").unwrap()
 });
 
 /// 临时结构，用于在解析时暂存一个逻辑块的信息。
@@ -47,7 +47,7 @@ fn parse_spl_timestamp_ms(ts_str: &str) -> Result<u64, ConvertError> {
         2 => fraction_str.parse::<u64>()? * 10,
         3..=6 => {
             let valid_part = &fraction_str[..3.min(fraction_str.len())];
-            valid_part.parse::<u64>()? * 10u64.pow(3 - valid_part.len() as u32)
+            valid_part.parse::<u64>()? * 10u64.pow(3 - u32::try_from(valid_part.len()).unwrap_or(3))
         }
         _ => {
             return Err(ConvertError::InvalidTime(format!(
@@ -72,7 +72,9 @@ fn parse_syllables(
         let raw_segment_text = &text[last_pos..m.start()];
         last_pos = m.end();
 
-        let caps = SPL_ANY_TIMESTAMP_REGEX.captures(m.as_str()).unwrap();
+        let Some(caps) = SPL_ANY_TIMESTAMP_REGEX.captures(m.as_str()) else {
+            continue; // 跳过无法解析的匹配
+        };
         let next_time = if let Some(ts_content) = caps.get(1).or_else(|| caps.get(2)) {
             parse_spl_timestamp_ms(ts_content.as_str())?
         } else {
@@ -139,10 +141,8 @@ pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
 
             if let Some(last_ts_match) = SPL_ANY_TIMESTAMP_REGEX.find_iter(&text_to_process).last()
                 && last_ts_match.end() == text_to_process.len()
-                && let Some(ts_content) = SPL_ANY_TIMESTAMP_REGEX
-                    .captures(last_ts_match.as_str())
-                    .unwrap()
-                    .get(1)
+                && let Some(last_caps) = SPL_ANY_TIMESTAMP_REGEX.captures(last_ts_match.as_str())
+                && let Some(ts_content) = last_caps.get(1)
                 && let Ok(ms) = parse_spl_timestamp_ms(ts_content.as_str())
             {
                 current_block.explicit_end_ms = Some(ms);

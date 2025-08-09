@@ -9,7 +9,7 @@ use tracing::info;
 /// 获取应用配置目录下指定文件的完整路径。
 ///
 /// # 参数
-/// * `filename` - 目标配置文件的名称，例如 "kugou_config.json"。
+/// * `filename` - 目标配置文件的名称，例如 "`kugou_config.json`"。
 pub(crate) fn get_config_file_path(filename: &str) -> Result<PathBuf, std::io::Error> {
     if let Some(mut config_dir) = dirs::config_dir() {
         config_dir.push("lyrics-helper");

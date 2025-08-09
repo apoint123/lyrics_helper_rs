@@ -99,6 +99,6 @@ impl MatchScorable for DurationMatchType {
 
 impl<T: MatchScorable> MatchScorable for Option<T> {
     fn get_score(&self) -> i32 {
-        self.as_ref().map_or(0, |m| m.get_score())
+        self.as_ref().map_or(0, MatchScorable::get_score)
     }
 }

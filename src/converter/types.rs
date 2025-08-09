@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, fmt, io, path::PathBuf, str::FromStr};
 
+use bitflags::bitflags;
 use quick_xml::{
     Error as QuickXmlErrorMain, encoding::EncodingError,
     events::attributes::AttrError as QuickXmlAttrError,
@@ -42,7 +43,7 @@ pub enum ConvertError {
     /// JSON 解析错误。
     #[error("解析 JSON 内容 {context} 失败: {source}")]
     JsonParse {
-        /// 底层 serde_json 错误
+        /// 底层 `serde_json` 错误
         #[source]
         source: serde_json::Error,
         /// 有关错误发生位置的上下文信息。
@@ -75,7 +76,8 @@ pub enum ConvertError {
 }
 
 impl ConvertError {
-    /// 创建一个带有上下文的 JsonParse 错误。
+    /// 创建一个带有上下文的 `JsonParse` 错误。
+    #[must_use]
     pub fn json_parse(source: serde_json::Error, context: String) -> Self {
         Self::JsonParse { source, context }
     }
@@ -101,28 +103,28 @@ impl std::error::Error for ParseCanonicalMetadataKeyError {}
 #[strum(ascii_case_insensitive)]
 #[derive(Default)]
 pub enum LyricFormat {
-    /// Advanced SubStation Alpha 格式。
+    /// `Advanced SubStation Alpha` 格式。
     Ass,
-    /// Timed Text Markup Language 格式。
+    /// `Timed Text Markup Language` 格式。
     #[default]
     Ttml,
-    /// Apple Music JSON 格式 (内嵌TTML)。
+    /// `Apple Music JSON` 格式 (内嵌TTML)。
     AppleMusicJson,
-    /// Lyricify Syllable (*.lys)。
+    /// `Lyricify Syllable` 格式。
     Lys,
-    /// 标准 LRC (LyRiCs) 格式。
+    /// 标准 LRC (`LyRiCs`) 格式。
     Lrc,
     /// 增强型 LRC (Enhanced LRC) 格式，支持逐字时间戳。
     EnhancedLrc,
-    /// QQ Music QRC 格式。
+    /// QQ 音乐 QRC 格式。
     Qrc,
-    /// NetEase YRC 格式。
+    /// 网易云音乐 YRC 格式。
     Yrc,
-    /// Lyricify Lines (*.lyl)。
+    /// `Lyricify Lines` 格式。
     Lyl,
-    /// Salt Player Lyrics (*.spl)。
+    /// `Salt Player Lyrics` 格式。
     Spl,
-    /// Lyricify Quick Export (*.lqe)。
+    /// `Lyricify Quick Export` 格式。
     Lqe,
     /// 酷狗 KRC 格式。
     Krc,
@@ -130,6 +132,7 @@ pub enum LyricFormat {
 
 impl LyricFormat {
     /// 将歌词格式枚举转换为对应的文件扩展名字符串。
+    #[must_use]
     pub fn to_extension_str(self) -> &'static str {
         match self {
             LyricFormat::Ass => "ass",
@@ -221,7 +224,7 @@ pub enum TrackMetadataKey {
 pub struct FuriganaSyllable {
     /// 振假名文本内容
     pub text: String,
-    /// 可选的时间戳 (start_ms, end_ms)
+    /// 可选的时间戳 (`start_ms`, `end_ms`)
     pub timing: Option<(u64, u64)>,
 }
 
@@ -284,6 +287,7 @@ pub struct LyricLine {
 // TODO: 这几个方法只是短期过渡用，最后应该删除。
 impl LyricLine {
     /// 获取主轨道的音节列表
+    #[must_use]
     pub fn get_main_syllables(&self) -> Vec<LyricSyllable> {
         self.tracks
             .iter()
@@ -301,6 +305,7 @@ impl LyricLine {
     }
 
     /// 获取行文本
+    #[must_use]
     pub fn get_line_text(&self) -> Option<String> {
         let main_syllables = self.get_main_syllables();
         if main_syllables.is_empty() {
@@ -323,6 +328,7 @@ impl LyricLine {
     }
 
     /// 获取翻译轨道列表
+    #[must_use]
     pub fn get_translation_tracks(&self) -> Vec<&LyricTrack> {
         self.tracks
             .iter()
@@ -331,6 +337,7 @@ impl LyricLine {
     }
 
     /// 获取罗马音轨道列表
+    #[must_use]
     pub fn get_romanization_tracks(&self) -> Vec<&LyricTrack> {
         self.tracks
             .iter()
@@ -339,6 +346,7 @@ impl LyricLine {
     }
 
     /// 获取背景轨道
+    #[must_use]
     pub fn get_background_track(&self) -> Option<&LyricTrack> {
         self.tracks
             .iter()
@@ -357,7 +365,7 @@ impl LyricLine {
                     syllables,
                     furigana: None,
                 }],
-                metadata: std::collections::HashMap::new(),
+                metadata: HashMap::new(),
             };
             let main_annotated_track = AnnotatedTrack {
                 content_type: ContentType::Main,
@@ -385,7 +393,7 @@ impl LyricLine {
                 ends_with_space: false,
             };
 
-            let mut metadata = std::collections::HashMap::new();
+            let mut metadata = HashMap::new();
             if let Some(lang) = language {
                 metadata.insert(TrackMetadataKey::Language, lang);
             }
@@ -420,7 +428,7 @@ impl LyricLine {
                 ends_with_space: false,
             };
 
-            let mut metadata = std::collections::HashMap::new();
+            let mut metadata = HashMap::new();
             if let Some(scheme_val) = scheme {
                 metadata.insert(TrackMetadataKey::Scheme, scheme_val);
             }
@@ -485,9 +493,9 @@ pub enum CanonicalMetadataKey {
     AppleMusicId,
     /// 国际标准音像制品编码 (International Standard Recording Code)。
     Isrc,
-    /// TTML歌词贡献者的GitHubID。
+    /// 逐词歌词作者 Github ID。
     TtmlAuthorGithub,
-    /// TTML歌词贡献者的GitHub登录名。
+    /// 逐词歌词作者 GitHub 用户名。
     TtmlAuthorGithubLogin,
 
     /// 用于所有其他未明确定义的标准或非标准元数据键。
@@ -518,6 +526,7 @@ impl fmt::Display for CanonicalMetadataKey {
 
 impl CanonicalMetadataKey {
     /// 定义哪些键应该被显示出来
+    #[must_use]
     pub fn is_public(&self) -> bool {
         matches!(
             self,
@@ -654,6 +663,7 @@ pub struct BatchLoadedFile {
 }
 impl BatchLoadedFile {
     /// 根据文件路径创建一个新的 `BatchLoadedFile` 实例。
+    #[must_use]
     pub fn new(path: PathBuf) -> Self {
         let filename = path
             .file_name()
@@ -731,6 +741,7 @@ pub struct BatchConversionConfig {
 
 impl BatchConversionConfig {
     /// 创建一个新的 `BatchConversionConfig` 实例。
+    #[must_use]
     pub fn new(
         main_lyric_id: BatchFileId,
         target_format: LyricFormat,
@@ -784,6 +795,7 @@ impl InputFile {
     /// * `format` - 歌词的格式 (`LyricFormat` 枚举)。
     /// * `language` - 可选的语言代码 (BCP-47 格式，例如 "zh-Hans")。
     /// * `filename` - 可选的原始文件名，用于提供上下文。
+    #[must_use]
     pub fn new(
         content: String,
         format: LyricFormat,
@@ -985,36 +997,41 @@ pub struct AssGenerationOptions {
     pub styles: Option<String>,
 }
 
+bitflags! {
+    /// 元数据清理器的配置标志
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct MetadataStripperFlags: u8 {
+        /// 启用元数据清理功能
+        const ENABLED                 = 1 << 0;
+        /// 关键词匹配区分大小写
+        const KEYWORD_CASE_SENSITIVE  = 1 << 1;
+        /// 启用基于正则表达式的行移除
+        const ENABLE_REGEX_STRIPPING  = 1 << 2;
+        /// 正则表达式匹配区分大小写
+        const REGEX_CASE_SENSITIVE    = 1 << 3;
+    }
+}
+
+impl Default for MetadataStripperFlags {
+    fn default() -> Self {
+        Self::ENABLED | Self::ENABLE_REGEX_STRIPPING
+    }
+}
+
 /// 配置元数据行清理器的选项。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MetadataStripperOptions {
-    /// 是否启用此清理功能。
-    pub enabled: bool,
+    /// 用于控制清理器行为的位标志。
+    #[serde(default)]
+    pub flags: MetadataStripperFlags,
+
     /// 用于匹配头部/尾部块的关键词列表。
     /// 如果为 `None`，将使用一组内建的默认关键词。
     pub keywords: Option<Vec<String>>,
-    /// 关键词匹配是否区分大小写。
-    pub keyword_case_sensitive: bool,
-    /// 是否启用基于正则表达式的行移除。
-    pub enable_regex_stripping: bool,
+
     /// 用于匹配并移除任意行的正则表达式列表。
     /// 如果为 `None`，将使用一组内建的默认正则表达式。
     pub regex_patterns: Option<Vec<String>>,
-    /// 正则表达式匹配是否区分大小写。
-    pub regex_case_sensitive: bool,
-}
-
-impl Default for MetadataStripperOptions {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            keywords: None,
-            keyword_case_sensitive: false,
-            enable_regex_stripping: true,
-            regex_patterns: None,
-            regex_case_sensitive: false,
-        }
-    }
 }
 
 /// 简繁转换的模式
@@ -1027,7 +1044,7 @@ pub enum ChineseConversionMode {
     AddAsTranslation,
 }
 
-/// 为 ferrous_opencc::config::BuiltinConfig 提供扩展方法
+/// 为 `ferrous_opencc::config::BuiltinConfig` 提供扩展方法
 pub trait BuiltinConfigExt {
     /// 推断配置对应的目标语言标签
     fn deduce_lang_tag(self) -> Option<&'static str>;
@@ -1055,7 +1072,7 @@ impl BuiltinConfigExt for ferrous_opencc::config::BuiltinConfig {
 /// 简繁转换的配置选项
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChineseConversionOptions {
-    /// 指定要使用的 OpenCC 配置。
+    /// 指定要使用的 `OpenCC` 配置。
     /// 当值为 `Some(config)` 时，功能启用。
     pub config: Option<ferrous_opencc::config::BuiltinConfig>,
 

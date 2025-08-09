@@ -1,7 +1,7 @@
 //! QIMEI 设备指纹获取模块
 //!
 //! Qimei 是访问 QQ 音乐新版 API 必需的一个关键身份参数。
-//! API 来源于 https://github.com/luren-dc/QQMusicApi
+//! API 来源于 <https://github.com/luren-dc/QQMusicApi>
 
 use crate::providers::qq::device::Device;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -11,13 +11,14 @@ use md5::{Digest, Md5};
 use rand::Rng;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
+use std::fmt::Write;
 
-const PUBLIC_KEY: &str = r#"-----BEGIN PUBLIC KEY-----
+const PUBLIC_KEY: &str = r"-----BEGIN PUBLIC KEY-----
 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDEIxgwoutfwoJxcGQeedgP7FG9
 qaIuS0qzfR8gWkrkTZKM2iWHn2ajQpBRZjMSoSf6+KJGvar2ORhBfpDXyVtZCKpq
 LQ+FLkpncClKVIrBwv6PHyUvuCb0rIarmgDnzkfQAqVufEtR64iazGDKatvJ9y6B
 9NMbHddGSAUmRTCrHQIDAQAB
------END PUBLIC KEY-----"#;
+-----END PUBLIC KEY-----";
 
 const SECRET: &str = "ZdJqM15EeO2zWc08";
 const APP_KEY: &str = "0AND0HD6FE4HY80F";
@@ -43,14 +44,15 @@ fn rsa_encrypt(content: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
 fn aes_encrypt(key: &[u8], content: &[u8]) -> Result<Vec<u8>, &'static str> {
     type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
+    const BLOCK_SIZE: usize = 16;
 
     let mut cipher =
         Aes128CbcEnc::new_from_slices(key, key).map_err(|_| "Invalid key or IV length")?;
 
-    const BLOCK_SIZE: usize = 16;
     let pad_len = BLOCK_SIZE - (content.len() % BLOCK_SIZE);
     let mut buf = Vec::with_capacity(content.len() + pad_len);
     buf.extend_from_slice(content);
+    #[allow(clippy::cast_possible_truncation)]
     buf.resize(content.len() + pad_len, pad_len as u8);
 
     for chunk in buf.chunks_mut(BLOCK_SIZE) {
@@ -66,15 +68,15 @@ fn random_beacon_id() -> String {
 
     let now = Local::now();
     let time_month = now.format("%Y-%m-01").to_string();
-    let rand1: u32 = rng.random_range(100000..=999999);
-    let rand2: u64 = rng.random_range(100000000..=999999999);
+    let rand1: u32 = rng.random_range(100_000..=999_999);
+    let rand2: u64 = rng.random_range(100_000_000..=999_999_999);
 
     for i in 1..=40 {
-        beacon_id.push_str(&format!("k{i}:"));
+        write!(beacon_id, "k{i}:").unwrap();
 
         match i {
             1 | 2 | 13 | 14 | 17 | 18 | 21 | 22 | 25 | 26 | 29 | 30 | 33 | 34 | 37 | 38 => {
-                beacon_id.push_str(&format!("{time_month}{rand1}.{rand2}"));
+                write!(beacon_id, "{time_month}{rand1}.{rand2}").unwrap();
             }
             3 => {
                 beacon_id.push_str("0000000000000000");
@@ -92,7 +94,7 @@ fn random_beacon_id() -> String {
             _ => {
                 beacon_id.push_str(&rng.random_range(0..=9999).to_string());
             }
-        };
+        }
         beacon_id.push(';');
     }
     beacon_id
@@ -107,6 +109,8 @@ pub async fn get_qimei(
     device: &Device,
     version: &str,
 ) -> Result<QimeiResult, Box<dyn std::error::Error>> {
+    const HEX_CHARSET: &[u8] = b"abcdef1234567890";
+
     let network_result = async {
         let reserved = serde_json::json!({
             "harmony": "0", "clone": "0", "containe": "",
@@ -133,9 +137,9 @@ pub async fn get_qimei(
             "deviceType": "Phone", "sdkName": "",
             "reserved": reserved.to_string(),
         });
+
         let payload_bytes = serde_json::to_vec(&payload)?;
 
-        const HEX_CHARSET: &[u8] = b"abcdef1234567890";
         let (crypt_key, nonce) = {
             let mut rng = rand::rng();
             let crypt_key: String = (0..16)
