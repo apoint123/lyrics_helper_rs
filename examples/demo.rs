@@ -9,7 +9,7 @@
 use std::io::{self, Write};
 
 use lyrics_helper_rs::converter::processors::agent_recognizer;
-use lyrics_helper_rs::converter::types::TtmlGenerationOptions;
+use lyrics_helper_rs::converter::types::{AgentStore, TtmlGenerationOptions};
 use lyrics_helper_rs::error::Result;
 use lyrics_helper_rs::model::track::Track;
 use lyrics_helper_rs::{
@@ -89,10 +89,13 @@ async fn main() -> Result<()> {
 
     info!("正在将歌词转换为 TTML 格式...");
 
+    let agent_store = AgentStore::from_metadata_store(&metadata_store);
+
     let ttml_options = TtmlGenerationOptions::default();
     let ttml_output = converter::generators::ttml_generator::generate_ttml(
         &parsed_lyrics_data.parsed.lines,
         &metadata_store,
+        &agent_store,
         &ttml_options,
     )?;
 

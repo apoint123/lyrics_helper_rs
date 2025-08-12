@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::converter::{
     processors::metadata_processor::MetadataStore,
-    types::{ConvertError, LyricLine},
+    types::{ConvertError, LyricLine}, LyricSyllable,
 };
 
 /// 将毫秒时间格式化为 SPL 时间戳字符串 `[分:秒.厘秒]` 或 `<分:秒.厘秒>`。
@@ -37,7 +37,17 @@ pub fn generate_spl(
     for (i, line) in lines.iter().enumerate() {
         write!(spl_output, "{}", format_spl_timestamp(line.start_ms, false))?;
 
-        let main_syllables = line.get_main_syllables();
+        let main_syllables: Vec<&LyricSyllable> = line
+            .main_track()
+            .map(|track| {
+                track
+                    .content
+                    .words
+                    .iter()
+                    .flat_map(|word| &word.syllables)
+                    .collect()
+            })
+            .unwrap_or_default();
         let is_word_timed = !main_syllables.is_empty();
 
         if is_word_timed {
@@ -54,7 +64,7 @@ pub fn generate_spl(
                 write!(spl_output, "{}", format_spl_timestamp(line.end_ms, false))?;
             }
         } else {
-            if let Some(text) = line.get_line_text() {
+            if let Some(text) = line.main_text() {
                 write!(spl_output, "{text}")?;
             }
 
@@ -71,19 +81,22 @@ pub fn generate_spl(
         writeln!(spl_output)?;
 
         // 为了简单和兼容，也为翻译行也生成相同的时间戳
-        for track in line.get_translation_tracks() {
-            for word in &track.words {
-                for syllable in &word.syllables {
-                    writeln!(
-                        spl_output,
-                        "{}{}",
-                        format_spl_timestamp(line.start_ms, false),
-                        syllable.text
-                    )?;
+        if let Some(main_track) = line.main_track() {
+            for track in &main_track.translations {
+                for word in &track.words {
+                    for syllable in &word.syllables {
+                        writeln!(
+                            spl_output,
+                            "{}{}",
+                            format_spl_timestamp(line.start_ms, false),
+                            syllable.text
+                        )?;
+                    }
                 }
             }
         }
-    }
+        }
+    
 
     Ok(spl_output)
 }

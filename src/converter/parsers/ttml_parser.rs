@@ -10,11 +10,12 @@ use quick_xml::{
     errors::Error as QuickXmlError,
     events::{BytesStart, BytesText, Event},
 };
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::converter::types::{
-    AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable, LyricTrack,
-    ParsedSourceData, TrackMetadataKey, TtmlParsingOptions, TtmlTimingMode, Word,
+    Agent, AgentStore, AgentType, AnnotatedTrack, ContentType, ConvertError, LyricFormat,
+    LyricLine, LyricSyllable, LyricTrack, ParsedSourceData, TrackMetadataKey, TtmlParsingOptions,
+    TtmlTimingMode, Word,
 };
 
 // =================================================================================
@@ -105,6 +106,13 @@ struct TtmlParserState {
     metadata_state: MetadataParseState,
     /// 存储 `<body>` 和 `<p>` 区域解析状态的结构体。
     body_state: BodyParseState,
+
+    /// 用于存储正在构建的 `AgentStore`
+    agent_store: AgentStore,
+    /// 用于为在 `<p>` 标签中直接发现的 `agent` 名称生成新ID的计数器
+    agent_counter: u32,
+    /// 用于存储已为直接名称生成的 `ID` 映射 (`name` -> `id`)
+    agent_name_to_id_map: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -156,7 +164,6 @@ struct DetailedAuxiliaryTracks {
 struct MetadataParseState {
     translation_map: HashMap<String, (String, Option<String>)>,
     timed_track_map: HashMap<String, DetailedAuxiliaryTracks>,
-    agent_id_to_name_map: HashMap<String, String>,
 
     context: MetadataContext,
     current_main_syllables: Vec<LyricSyllable>,
@@ -345,6 +352,7 @@ pub fn parse_ttml(
     Ok(ParsedSourceData {
         lines,
         raw_metadata,
+        agents: state.agent_store,
         source_format: LyricFormat::Ttml,
         source_filename: None,
         is_line_timed_source: state.is_line_timing_mode,
@@ -365,28 +373,41 @@ fn handle_metadata_event(
     reader: &mut Reader<&[u8]>,
     state: &mut TtmlParserState,
     raw_metadata: &mut HashMap<String, Vec<String>>,
-    _warnings: &mut Vec<String>,
+    warnings: &mut Vec<String>,
 ) -> Result<(), ConvertError> {
     let meta_state = &mut state.metadata_state;
 
     match event {
         Event::Start(e) => match e.name().as_ref() {
             TAG_AGENT | TAG_AGENT_TTM => {
-                let id = get_string_attribute(e, reader, &[ATTR_XML_ID])?;
-                meta_state.context = MetadataContext::InAgent { id };
+                let id_opt = get_string_attribute(e, reader, &[ATTR_XML_ID])?;
+                if let Some(id) = id_opt {
+                    let type_str = get_string_attribute(e, reader, &[b"type"])?.unwrap_or_default();
+                    let agent_type = match type_str.as_str() {
+                        "person" => AgentType::Person,
+                        "group" => AgentType::Group,
+                        _ => AgentType::Other,
+                    };
+
+                    let agent = Agent {
+                        id: id.clone(),
+                        name: None,
+                        agent_type,
+                    };
+                    state.agent_store.agents_by_id.insert(id.clone(), agent);
+                    meta_state.context = MetadataContext::InAgent { id: Some(id) };
+                } else {
+                    warnings.push("发现一个没有 xml:id 的 <ttm:agent> 标签，已忽略。".to_string());
+                }
             }
             TAG_NAME | TAG_NAME_TTM => {
                 if let MetadataContext::InAgent { id: Some(agent_id) } = &meta_state.context {
                     let name = reader.read_text(e.name())?.into_owned();
                     if !name.trim().is_empty() {
-                        let trimmed_name = name.trim().to_string();
-                        meta_state
-                            .agent_id_to_name_map
-                            .insert(agent_id.clone(), trimmed_name.clone());
-                        raw_metadata
-                            .entry("agent".to_string())
-                            .or_default()
-                            .push(format!("{agent_id}={trimmed_name}"));
+                        // MODIFICATION: Update the name in the Agent struct within the store
+                        if let Some(agent) = state.agent_store.agents_by_id.get_mut(agent_id) {
+                            agent.name = Some(name.trim().to_string());
+                        }
                     }
                 }
             }
@@ -461,8 +482,8 @@ fn handle_metadata_event(
                     )?
                     .unwrap_or(SpanRole::Generic);
 
-                    let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN])?;
-                    let end_ms = get_time_attribute(e, reader, &[ATTR_END])?;
+                    let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN], warnings)?;
+                    let end_ms = get_time_attribute(e, reader, &[ATTR_END], warnings)?;
 
                     meta_state.span_stack.push(SpanContext {
                         role,
@@ -492,14 +513,6 @@ fn handle_metadata_event(
             TAG_ITUNES_METADATA => meta_state.context = MetadataContext::None,
             TAG_SONGWRITER => meta_state.context = MetadataContext::InITunesMetadata,
             TAG_AGENT | TAG_AGENT_TTM => {
-                if let MetadataContext::InAgent { id: Some(agent_id) } = &meta_state.context
-                    && !meta_state.agent_id_to_name_map.contains_key(agent_id)
-                {
-                    raw_metadata
-                        .entry("agent".to_string())
-                        .or_default()
-                        .push(agent_id.clone());
-                }
                 meta_state.context = MetadataContext::None;
             }
             TAG_TRANSLATIONS | TAG_TRANSLITERATIONS => {
@@ -672,30 +685,58 @@ fn handle_global_event(
             TAG_P if state.body_state.in_body => {
                 state.body_state.in_p = true;
 
-                // 获取 p 标签的各个属性
-                let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN])?.unwrap_or(0);
-                let end_ms = get_time_attribute(e, reader, &[ATTR_END])?.unwrap_or(0);
+                let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN], warnings)?.unwrap_or(0);
+                let end_ms = get_time_attribute(e, reader, &[ATTR_END], warnings)?.unwrap_or(0);
 
-                let agent_id = get_string_attribute(e, reader, &[ATTR_AGENT, ATTR_AGENT_ALIAS])?;
+                let agent_attr_val =
+                    get_string_attribute(e, reader, &[ATTR_AGENT, ATTR_AGENT_ALIAS])?;
+                let mut final_agent_id = None;
 
-                let agent_name = agent_id
-                    .and_then(|id| state.metadata_state.agent_id_to_name_map.get(&id).cloned());
+                if let Some(val) = agent_attr_val {
+                    // 检查这个值是否是 <head> 中已定义的 ID
+                    if state.agent_store.agents_by_id.contains_key(&val) {
+                        final_agent_id = Some(val);
+                    } else {
+                        // 值被视为一个直接的名称，需要为其创建/查找ID
+                        if let Some(existing_id) = state.agent_name_to_id_map.get(&val) {
+                            final_agent_id = Some(existing_id.clone());
+                        } else {
+                            state.agent_counter += 1;
+                            let new_id = format!("p{}", state.agent_counter);
+
+                            state
+                                .agent_name_to_id_map
+                                .insert(val.clone(), new_id.clone());
+
+                            // 同时在 AgentStore 中创建一个新的 Agent 记录
+                            let new_agent = Agent {
+                                id: new_id.clone(),
+                                name: Some(val),
+                                agent_type: AgentType::Person, // 默认为 Person
+                            };
+                            state
+                                .agent_store
+                                .agents_by_id
+                                .insert(new_id.clone(), new_agent);
+
+                            final_agent_id = Some(new_id);
+                        }
+                    }
+                }
 
                 let song_part = get_string_attribute(e, reader, &[ATTR_ITUNES_SONG_PART])?
                     .or(state.body_state.current_div_song_part.clone());
                 let itunes_key = get_string_attribute(e, reader, &[ATTR_ITUNES_KEY])?;
 
-                // 创建 p 元素数据容器
                 state.body_state.current_p_element_data = Some(CurrentPElementData {
                     start_ms,
                     end_ms,
-                    agent: agent_name,
+                    agent: final_agent_id,
                     song_part,
                     itunes_key,
                     ..Default::default()
                 });
 
-                // 重置 p 内部的状态
                 state.text_buffer.clear();
                 state.body_state.span_stack.clear();
             }
@@ -780,21 +821,37 @@ fn handle_p_event(
 ) -> Result<(), ConvertError> {
     match event {
         Event::Start(e) if e.local_name().as_ref() == TAG_SPAN => {
-            process_span_start(e, state, reader)?;
+            process_span_start(e, state, reader, warnings)?;
         }
         Event::Text(e) => process_text_event(e, state)?,
         Event::GeneralRef(e) => {
             let entity_name = str::from_utf8(e.as_ref())
                 .map_err(|err| ConvertError::Internal(format!("无法将实体名解码为UTF-8: {err}")))?;
-            let decoded_char = match entity_name {
-                "amp" => '&',
-                "lt" => '<',
-                "gt" => '>',
-                "quot" => '"',
-                "apos" => '\'',
-                _ => {
-                    warnings.push(format!("忽略了未知的XML实体 '&{entity_name};'"));
+
+            let decoded_char = if let Some(num_str) = entity_name.strip_prefix('#') {
+                let (radix, code_point_str) = if let Some(stripped) = num_str.strip_prefix('x') {
+                    (16, stripped)
+                } else {
+                    (10, num_str)
+                };
+
+                if let Ok(code_point) = u32::from_str_radix(code_point_str, radix) {
+                    char::from_u32(code_point).unwrap_or('\0')
+                } else {
+                    warnings.push(format!("无法解析无效的XML数字实体 '&{entity_name};'"));
                     '\0'
+                }
+            } else {
+                match entity_name {
+                    "amp" => '&',
+                    "lt" => '<',
+                    "gt" => '>',
+                    "quot" => '"',
+                    "apos" => '\'',
+                    _ => {
+                        warnings.push(format!("忽略了未知的XML实体 '&{entity_name};'"));
+                        '\0'
+                    }
                 }
             };
 
@@ -808,7 +865,6 @@ fn handle_p_event(
                 }
             }
         }
-
         Event::End(e) => match e.local_name().as_ref() {
             TAG_BR => {
                 warnings.push(format!(
@@ -895,6 +951,7 @@ fn process_span_start(
     e: &BytesStart,
     state: &mut TtmlParserState,
     reader: &Reader<&[u8]>,
+    warnings: &mut Vec<String>,
 ) -> Result<(), ConvertError> {
     // 进入新的 span 前，清空文本缓冲区
     state.text_buffer.clear();
@@ -912,8 +969,8 @@ fn process_span_start(
 
     let lang = get_string_attribute(e, reader, &[ATTR_XML_LANG])?;
     let scheme = get_string_attribute(e, reader, &[ATTR_XML_SCHEME])?;
-    let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN])?;
-    let end_ms = get_time_attribute(e, reader, &[ATTR_END])?;
+    let start_ms = get_time_attribute(e, reader, &[ATTR_BEGIN], warnings)?;
+    let end_ms = get_time_attribute(e, reader, &[ATTR_END], warnings)?;
 
     // 将解析出的上下文压入堆栈，以支持嵌套 span
     state.body_state.span_stack.push(SpanContext {
@@ -1081,21 +1138,9 @@ fn handle_generic_span_end(
             ContentType::Main
         };
 
-        let annotated_track_idx = if let Some(index) = p_data
-            .tracks_accumulator
-            .iter()
-            .position(|t| t.content_type == target_content_type)
-        {
-            index
-        } else {
-            p_data.tracks_accumulator.push(AnnotatedTrack {
-                content_type: target_content_type,
-                ..Default::default()
-            });
-            p_data.tracks_accumulator.len() - 1
-        };
-
-        let target_content_track = &mut p_data.tracks_accumulator[annotated_track_idx].content;
+        let target_annotated_track =
+            get_or_create_target_annotated_track(p_data, target_content_type);
+        let target_content_track = &mut target_annotated_track.content;
 
         if target_content_track.words.is_empty() {
             target_content_track.words.push(Word::default());
@@ -1116,11 +1161,22 @@ fn handle_generic_span_end(
                 was_background: was_within_bg,
             };
         }
-    } else if !text.trim().is_empty() && !state.is_line_timing_mode {
-        warnings.push(format!(
-            "逐字模式下，span缺少时间信息，文本 '{}' 被忽略。",
-            text.trim().escape_debug()
-        ));
+    } else if !text.trim().is_empty() {
+        if state.is_line_timing_mode {
+            if let Some(p_data) = state.body_state.current_p_element_data.as_mut() {
+                if !p_data.line_text_accumulator.is_empty()
+                    && !p_data.line_text_accumulator.ends_with(char::is_whitespace)
+                {
+                    p_data.line_text_accumulator.push(' ');
+                }
+                p_data.line_text_accumulator.push_str(text.trim());
+            }
+        } else {
+            warnings.push(format!(
+                "逐字模式下，span缺少时间信息，文本 '{}' 被忽略。",
+                text.trim().escape_debug()
+            ));
+        }
     }
     Ok(())
 }
@@ -1201,42 +1257,54 @@ fn handle_auxiliary_span_end(
             ConvertError::Internal("在处理辅助 span 时丢失了 p_data 上下文".to_string())
         })?;
 
-    if let Some(last_content_track) = p_data.tracks_accumulator.last_mut() {
-        let syllable = LyricSyllable {
-            text: state.text_processing_buffer.clone(),
-            ..Default::default()
-        };
-        let word = Word {
-            syllables: vec![syllable],
-            ..Default::default()
-        };
-        let mut metadata = HashMap::new();
+    let was_within_bg = state
+        .body_state
+        .span_stack
+        .iter()
+        .any(|s| s.role == SpanRole::Background);
 
-        let mut aux_track = LyricTrack {
-            words: vec![word],
-            metadata: HashMap::default(),
-        };
+    let target_content_type = if was_within_bg {
+        ContentType::Background
+    } else {
+        ContentType::Main
+    };
 
-        match ctx.role {
-            SpanRole::Translation => {
-                if let Some(lang) = ctx.lang.clone().or(state.default_translation_lang.clone()) {
-                    metadata.insert(TrackMetadataKey::Language, lang);
-                }
-                aux_track.metadata = metadata;
-                last_content_track.translations.push(aux_track);
+    let target_annotated_track = get_or_create_target_annotated_track(p_data, target_content_type);
+
+    let syllable = LyricSyllable {
+        text: state.text_processing_buffer.clone(),
+        ..Default::default()
+    };
+    let word = Word {
+        syllables: vec![syllable],
+        ..Default::default()
+    };
+    let mut metadata = HashMap::new();
+
+    let mut aux_track = LyricTrack {
+        words: vec![word],
+        metadata: HashMap::default(),
+    };
+
+    match ctx.role {
+        SpanRole::Translation => {
+            if let Some(lang) = ctx.lang.clone().or(state.default_translation_lang.clone()) {
+                metadata.insert(TrackMetadataKey::Language, lang);
             }
-            SpanRole::Romanization => {
-                if let Some(lang) = ctx.lang.clone().or(state.default_romanization_lang.clone()) {
-                    metadata.insert(TrackMetadataKey::Language, lang);
-                }
-                if let Some(scheme) = ctx.scheme.clone() {
-                    metadata.insert(TrackMetadataKey::Scheme, scheme);
-                }
-                aux_track.metadata = metadata;
-                last_content_track.romanizations.push(aux_track);
-            }
-            _ => {} // 不应该发生
+            aux_track.metadata = metadata;
+            target_annotated_track.translations.push(aux_track);
         }
+        SpanRole::Romanization => {
+            if let Some(lang) = ctx.lang.clone().or(state.default_romanization_lang.clone()) {
+                metadata.insert(TrackMetadataKey::Language, lang);
+            }
+            if let Some(scheme) = ctx.scheme.clone() {
+                metadata.insert(TrackMetadataKey::Scheme, scheme);
+            }
+            aux_track.metadata = metadata;
+            target_annotated_track.romanizations.push(aux_track);
+        }
+        _ => {} // 不应该发生
     }
 
     Ok(())
@@ -1260,10 +1328,6 @@ fn handle_background_span_end(
     // 处理不规范的情况：背景容器直接包含文本，而不是通过嵌套的 span。
     let trimmed_text = text.trim();
     if !trimmed_text.is_empty() {
-        warn!(
-            "<span ttm:role='x-bg'> 直接包含文本 '{}'。",
-            trimmed_text.escape_debug()
-        );
         if let (Some(start_ms), Some(end_ms)) = (ctx.start_ms, ctx.end_ms) {
             if let Some(bg_annotated_track) = p_data
                 .tracks_accumulator
@@ -1278,7 +1342,10 @@ fn handle_background_span_end(
                         .iter()
                         .all(|w| w.syllables.is_empty())
                 {
-                    normalize_text_whitespace_into(trimmed_text, &mut state.text_processing_buffer);
+                    clean_parentheses_from_bg_text_into(
+                        trimmed_text,
+                        &mut state.text_processing_buffer,
+                    );
 
                     let syllable = LyricSyllable {
                         text: state.text_processing_buffer.clone(),
@@ -1640,8 +1707,21 @@ fn get_time_attribute(
     e: &BytesStart,
     reader: &Reader<&[u8]>,
     attr_names: &[&[u8]],
+    warnings: &mut Vec<String>,
 ) -> Result<Option<u64>, ConvertError> {
-    get_attribute_with_aliases(e, reader, attr_names, parse_ttml_time_to_ms)
+    if let Some(value_str) = get_string_attribute(e, reader, attr_names)? {
+        match parse_ttml_time_to_ms(&value_str) {
+            Ok(ms) => Ok(Some(ms)),
+            Err(err) => {
+                warnings.push(format!(
+                    "时间戳 '{value_str}' 解析失败 ({err}). 该时间戳将被忽略."
+                ));
+                Ok(None)
+            }
+        }
+    } else {
+        Ok(None)
+    }
 }
 
 /// 尝试从一个XML格式错误中恢复。
@@ -1686,6 +1766,25 @@ fn attempt_recovery_from_error(
         warnings
             .push("错误发生在全局作用域。将重置解析器状态，尝试寻找下一个有效元素。".to_string());
         state.body_state = BodyParseState::default();
+    }
+}
+
+fn get_or_create_target_annotated_track(
+    p_data: &mut CurrentPElementData,
+    content_type: ContentType,
+) -> &mut AnnotatedTrack {
+    if let Some(index) = p_data
+        .tracks_accumulator
+        .iter()
+        .position(|t| t.content_type == content_type)
+    {
+        &mut p_data.tracks_accumulator[index]
+    } else {
+        p_data.tracks_accumulator.push(AnnotatedTrack {
+            content_type,
+            ..Default::default()
+        });
+        p_data.tracks_accumulator.last_mut().unwrap() // 刚插入，所以 unwrap 是安全的
     }
 }
 

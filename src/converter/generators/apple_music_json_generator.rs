@@ -6,8 +6,8 @@ use crate::converter::{
     generators::ttml_generator,
     processors::metadata_processor::MetadataStore,
     types::{
-        CanonicalMetadataKey, ConversionOptions, ConvertError, LyricLine, TtmlGenerationOptions,
-        TtmlTimingMode,
+        AgentStore, CanonicalMetadataKey, ConversionOptions, ConvertError, LyricLine,
+        TtmlGenerationOptions, TtmlTimingMode,
     },
 };
 use serde::Serialize;
@@ -56,7 +56,9 @@ pub fn generate_apple_music_json(
         ..options.ttml.clone()
     };
 
-    let ttml_content = ttml_generator::generate_ttml(lines, metadata_store, &apple_ttml_options)?;
+    let agent_store = AgentStore::from_metadata_store(metadata_store);
+    let ttml_content =
+        ttml_generator::generate_ttml(lines, metadata_store, &agent_store, &apple_ttml_options)?;
 
     let apple_music_id = metadata_store
         .get_single_value(&CanonicalMetadataKey::AppleMusicId)

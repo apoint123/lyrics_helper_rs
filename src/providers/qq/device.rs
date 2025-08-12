@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 /// 描述操作系统的版本信息。
 #[allow(missing_docs)]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct OsVersion {
     pub incremental: String,
     pub release: String,

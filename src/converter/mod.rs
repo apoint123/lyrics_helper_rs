@@ -18,8 +18,8 @@ use crate::converter::{
         metadata_processor::MetadataStore,
     },
     types::{
-        ContentType, ConversionInput, ConversionOptions, ConversionResult, ConversionTask,
-        ConvertError, FullConversionResult, InputFile, ParsedSourceData,
+        AgentStore, ContentType, ConversionInput, ConversionOptions, ConversionResult,
+        ConversionTask, ConvertError, FullConversionResult, InputFile, ParsedSourceData,
     },
 };
 use tracing::{debug, warn};
@@ -107,6 +107,12 @@ pub fn generate_from_parsed<S: BuildHasher>(
 ) -> Result<FullConversionResult, ConvertError> {
     let mut metadata_store = MetadataStore::from(&source_data);
 
+    if let Some(agent_definitions) = source_data.raw_metadata.get("agent")
+        && !agent_definitions.is_empty()
+    {
+        metadata_store.set_multiple("internal::agents", agent_definitions.clone());
+    }
+
     if let Some(overrides) = user_metadata_overrides {
         for (key, values) in overrides {
             metadata_store.set_multiple(key, values.clone());
@@ -125,26 +131,26 @@ pub fn generate_from_parsed<S: BuildHasher>(
             &metadata_store,
             &options.lrc,
         ),
-
         LyricFormat::EnhancedLrc => generators::enhanced_lrc_generator::generate_enhanced_lrc(
             &source_data.lines,
             &metadata_store,
             &options.lrc,
         ),
-
         LyricFormat::Ass => generators::ass_generator::generate_ass(
             &source_data.lines,
             &metadata_store,
             source_data.is_line_timed_source,
             &options.ass,
         ),
-
-        LyricFormat::Ttml => generators::ttml_generator::generate_ttml(
-            &source_data.lines,
-            &metadata_store,
-            &options.ttml,
-        ),
-
+        LyricFormat::Ttml => {
+            let agent_store = AgentStore::from_metadata_store(&metadata_store);
+            generators::ttml_generator::generate_ttml(
+                &source_data.lines,
+                &metadata_store,
+                &agent_store,
+                &options.ttml,
+            )
+        }
         LyricFormat::AppleMusicJson => {
             generators::apple_music_json_generator::generate_apple_music_json(
                 &source_data.lines,
@@ -155,25 +161,20 @@ pub fn generate_from_parsed<S: BuildHasher>(
         LyricFormat::Qrc => {
             generators::qrc_generator::generate_qrc(&source_data.lines, &metadata_store)
         }
-
         LyricFormat::Lqe => generators::lqe_generator::generate_lqe(
             &source_data.lines,
             &metadata_store,
             &options.lqe,
         ),
-
         LyricFormat::Krc => {
             generators::krc_generator::generate_krc(&source_data.lines, &metadata_store)
         }
-
         LyricFormat::Yrc => {
             generators::yrc_generator::generate_yrc(&source_data.lines, &metadata_store)
         }
-
         LyricFormat::Lys => {
             generators::lys_generator::generate_lys(&source_data.lines, &metadata_store)
         }
-
         LyricFormat::Spl => {
             generators::spl_generator::generate_spl(&source_data.lines, &metadata_store)
         }
@@ -363,7 +364,7 @@ fn parse_input_file(
 ) -> Result<ParsedSourceData, ConvertError> {
     debug!("正在解析文件，格式为: {:?}", file.format);
     match file.format {
-        LyricFormat::Lrc => parsers::lrc_parser::parse_lrc(&file.content),
+        LyricFormat::Lrc => parsers::lrc_parser::parse_lrc(&file.content, &options.lrc_parsing),
         LyricFormat::EnhancedLrc => parsers::enhanced_lrc_parser::parse_enhanced_lrc(&file.content),
         LyricFormat::Krc => parsers::krc_parser::parse_krc(&file.content),
         LyricFormat::Ass => parsers::ass_parser::parse_ass(&file.content),

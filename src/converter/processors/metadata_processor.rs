@@ -119,6 +119,22 @@ impl MetadataStore {
         self.data.clear();
     }
 
+    /// 根据自定义的字符串键获取多个元数据值。
+    ///
+    /// # 参数
+    /// * `key` - 用于查找的字符串键。
+    ///
+    /// # 返回
+    /// * `Option<&Vec<String>>` - 如果找到，则返回对应的值切片引用。
+    #[must_use]
+    pub fn get_multiple_values_by_key(&self, key: &str) -> Option<&Vec<String>> {
+        let canonical_key = key
+            .parse::<CanonicalMetadataKey>()
+            .unwrap_or_else(|_| CanonicalMetadataKey::Custom(key.to_string()));
+
+        self.data.get(&canonical_key)
+    }
+
     /// 对所有存储的元数据值进行清理和去重。
     ///
     /// 包括：

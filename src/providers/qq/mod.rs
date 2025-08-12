@@ -1073,12 +1073,19 @@ mod tests {
 
         assert!(!lyrics.lines.is_empty(), "歌词解析结果不应为空");
         assert!(
-            lyrics.lines[0].get_line_text().is_some(),
+            lyrics.lines[0].main_text().is_some(),
             "歌词第一行应该有文本内容"
         );
 
         assert!(
-            !lyrics.lines[10].get_main_syllables().is_empty(),
+            lyrics.lines[10].main_track().map_or(0, |track| {
+                track
+                    .content
+                    .words
+                    .iter()
+                    .flat_map(|word| &word.syllables)
+                    .count()
+            }) > 0,
             "QRC 歌词应该有音节信息"
         );
 
@@ -1105,7 +1112,7 @@ mod tests {
 
         let instrumental_line = &full_lyrics_result.parsed.lines[0];
         assert_eq!(
-            instrumental_line.get_line_text().as_deref(),
+            instrumental_line.main_text().as_deref(),
             Some("此歌曲为没有填词的纯音乐，请您欣赏"),
             "歌词行的文本内容不匹配"
         );

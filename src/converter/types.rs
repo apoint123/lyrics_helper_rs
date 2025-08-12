@@ -12,6 +12,8 @@ use strum_macros::{EnumIter, EnumString};
 use thiserror::Error;
 use tracing::warn;
 
+use crate::converter::processors::metadata_processor::MetadataStore;
+
 //=============================================================================
 // 1. 错误枚举
 //=============================================================================
@@ -267,6 +269,70 @@ pub struct AnnotatedTrack {
     pub romanizations: Vec<LyricTrack>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AgentType {
+    #[default]
+    Person,
+    Group,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Agent {
+    /// 内部ID, 例如 "v1"
+    pub id: String,
+    /// 可选的完整名称，例如 "演唱者1号"
+    pub name: Option<String>,
+    /// Agent 的类型
+    pub agent_type: AgentType,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStore {
+    pub agents_by_id: HashMap<String, Agent>,
+}
+
+impl AgentStore {
+    /// 从歌词行列表中构建 `AgentStore`
+    #[must_use]
+    pub fn from_metadata_store(metadata_store: &MetadataStore) -> Self {
+        let mut store = AgentStore::default();
+
+        if let Some(agent_definitions) = metadata_store.get_multiple_values_by_key("agent") {
+            for def_string in agent_definitions {
+                let (id, parsed_name) = match def_string.split_once('=') {
+                    Some((id, name)) => (id.to_string(), Some(name.to_string())),
+                    None => (def_string.clone(), None),
+                };
+
+                let is_chorus = id == "v1000"
+                    || parsed_name.as_deref() == Some("合")
+                    || parsed_name.as_deref() == Some("合唱");
+
+                let final_name = if is_chorus { None } else { parsed_name };
+                let agent_type = if is_chorus {
+                    AgentType::Group
+                } else {
+                    AgentType::Person
+                };
+
+                let agent = Agent {
+                    id: id.clone(),
+                    name: final_name,
+                    agent_type,
+                };
+                store.agents_by_id.insert(id, agent);
+            }
+        }
+        store
+    }
+
+    /// 获取所有 Agent 的迭代器
+    pub fn all_agents(&self) -> impl Iterator<Item = &Agent> {
+        self.agents_by_id.values()
+    }
+}
+
 /// 歌词行结构，作为多个并行带注解轨道的容器。
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LyricLine {
@@ -277,6 +343,8 @@ pub struct LyricLine {
     /// 行的结束时间，相对于歌曲开始的绝对时间（毫秒）。
     pub end_ms: u64,
     /// 可选的演唱者标识。
+    ///
+    /// 应该为数字 ID，例如 "v1"，"v1000"。
     pub agent: Option<String>,
     /// 可选的歌曲组成部分标记。
     pub song_part: Option<String>,
@@ -284,166 +352,182 @@ pub struct LyricLine {
     pub itunes_key: Option<String>,
 }
 
-// TODO: 这几个方法只是短期过渡用，最后应该删除。
-impl LyricLine {
-    /// 获取主轨道的音节列表
+impl LyricTrack {
+    /// 将轨道内所有音节的文本拼接成一个完整的字符串。
     #[must_use]
-    pub fn get_main_syllables(&self) -> Vec<LyricSyllable> {
-        self.tracks
+    pub fn text(&self) -> String {
+        self.words
             .iter()
-            .find(|track| track.content_type == ContentType::Main)
-            .map(|annotated_track| {
-                annotated_track
-                    .content
-                    .words
-                    .iter()
-                    .flat_map(|word| word.syllables.iter())
-                    .cloned()
-                    .collect()
+            .flat_map(|word| &word.syllables)
+            .map(|syl| {
+                if syl.ends_with_space {
+                    format!("{} ", syl.text)
+                } else {
+                    syl.text.clone()
+                }
             })
-            .unwrap_or_default()
+            .collect::<String>()
+            .trim_end()
+            .to_string()
     }
+}
 
-    /// 获取行文本
+impl LyricLine {
+    /// 创建一个带有指定时间戳的空 `LyricLine`。
     #[must_use]
-    pub fn get_line_text(&self) -> Option<String> {
-        let main_syllables = self.get_main_syllables();
-        if main_syllables.is_empty() {
-            None
-        } else {
-            let text = main_syllables
-                .iter()
-                .map(|syl| {
-                    if syl.ends_with_space {
-                        format!("{} ", syl.text)
-                    } else {
-                        syl.text.clone()
-                    }
-                })
-                .collect::<String>()
-                .trim_end()
-                .to_string();
-            if text.is_empty() { None } else { Some(text) }
+    pub fn new(start_ms: u64, end_ms: u64) -> Self {
+        Self {
+            start_ms,
+            end_ms,
+            ..Default::default()
         }
     }
 
-    /// 获取翻译轨道列表
-    #[must_use]
-    pub fn get_translation_tracks(&self) -> Vec<&LyricTrack> {
+    /// 返回一个迭代器，用于遍历所有指定内容类型的带注解轨道。
+    pub fn tracks_by_type(
+        &self,
+        content_type: ContentType,
+    ) -> impl Iterator<Item = &AnnotatedTrack> {
         self.tracks
             .iter()
-            .flat_map(|annotated_track| &annotated_track.translations)
-            .collect()
+            .filter(move |t| t.content_type == content_type)
     }
 
-    /// 获取罗马音轨道列表
+    /// 返回一个迭代器，用于遍历所有主歌词轨道 (`ContentType::Main`)。
+    pub fn main_tracks(&self) -> impl Iterator<Item = &AnnotatedTrack> {
+        self.tracks_by_type(ContentType::Main)
+    }
+
+    /// 返回一个迭代器，用于遍历所有背景人声音轨 (`ContentType::Background`)。
+    pub fn background_tracks(&self) -> impl Iterator<Item = &AnnotatedTrack> {
+        self.tracks_by_type(ContentType::Background)
+    }
+
+    /// 获取第一个主歌词轨道（如果存在）。
     #[must_use]
-    pub fn get_romanization_tracks(&self) -> Vec<&LyricTrack> {
-        self.tracks
-            .iter()
-            .flat_map(|annotated_track| &annotated_track.romanizations)
-            .collect()
+    pub fn main_track(&self) -> Option<&AnnotatedTrack> {
+        self.main_tracks().next()
     }
 
-    /// 获取背景轨道
+    /// 获取第一个背景人声音轨（如果存在）。
     #[must_use]
-    pub fn get_background_track(&self) -> Option<&LyricTrack> {
-        self.tracks
-            .iter()
-            .find(|track| track.content_type == ContentType::Background)
-            .map(|annotated_track| &annotated_track.content)
+    pub fn background_track(&self) -> Option<&AnnotatedTrack> {
+        self.background_tracks().next()
     }
 
-    /// 设置主轨道的音节
-    pub fn set_main_syllables(&mut self, syllables: Vec<LyricSyllable>) {
-        self.tracks
-            .retain(|track| track.content_type != ContentType::Main);
+    /// 获取第一个主歌词轨道的完整文本（如果存在）。
+    #[must_use]
+    pub fn main_text(&self) -> Option<String> {
+        self.main_track().map(|t| t.content.text())
+    }
 
-        if !syllables.is_empty() {
-            let main_content_track = LyricTrack {
+    /// 获取第一个背景人声轨道的完整文本（如果存在）。
+    #[must_use]
+    pub fn background_text(&self) -> Option<String> {
+        self.background_track().map(|t| t.content.text())
+    }
+
+    /// 向该行添加一个预先构建好的带注解轨道。
+    pub fn add_track(&mut self, track: AnnotatedTrack) {
+        self.tracks.push(track);
+    }
+
+    /// 向该行添加一个新的、简单的内容轨道（主歌词或背景）。
+    ///
+    /// # 参数
+    /// * `content_type` - 轨道的类型 (`Main` 或 `Background`)。
+    /// * `text` - 该轨道的完整文本。
+    pub fn add_content_track(&mut self, content_type: ContentType, text: impl Into<String>) {
+        let syllable = LyricSyllable {
+            text: text.into(),
+            start_ms: self.start_ms,
+            end_ms: self.end_ms,
+            ..Default::default()
+        };
+        let track = AnnotatedTrack {
+            content_type,
+            content: LyricTrack {
                 words: vec![Word {
-                    syllables,
-                    furigana: None,
+                    syllables: vec![syllable],
+                    ..Default::default()
                 }],
-                metadata: HashMap::new(),
-            };
-            let main_annotated_track = AnnotatedTrack {
-                content_type: ContentType::Main,
-                content: main_content_track,
-                translations: vec![],
-                romanizations: vec![],
-            };
-            self.tracks.push(main_annotated_track);
-        }
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        self.add_track(track);
     }
 
-    /// 添加翻译轨道
-    /// 注意：此方法会将翻译附加到找到的第一个主内容轨道上。
-    pub fn add_translation_track(&mut self, text: String, language: Option<String>) {
-        if let Some(main_track) = self
+    /// 为该行中所有指定类型的内容轨道添加一个翻译。
+    /// 例如，可用于为所有主歌词轨道添加一个统一的翻译。
+    pub fn add_translation(
+        &mut self,
+        content_type: ContentType,
+        text: impl Into<String>,
+        language: Option<&str>,
+    ) {
+        let text = text.into();
+        for track in self
             .tracks
             .iter_mut()
-            .find(|track| track.content_type == ContentType::Main)
+            .filter(|t| t.content_type == content_type)
         {
-            let syllable = LyricSyllable {
-                text,
-                start_ms: self.start_ms,
-                end_ms: self.end_ms,
-                duration_ms: Some(self.end_ms.saturating_sub(self.start_ms)),
-                ends_with_space: false,
-            };
-
             let mut metadata = HashMap::new();
             if let Some(lang) = language {
-                metadata.insert(TrackMetadataKey::Language, lang);
+                metadata.insert(TrackMetadataKey::Language, lang.to_string());
             }
-
             let translation_track = LyricTrack {
                 words: vec![Word {
-                    syllables: vec![syllable],
-                    furigana: None,
+                    syllables: vec![LyricSyllable {
+                        text: text.clone(),
+                        start_ms: self.start_ms,
+                        end_ms: self.end_ms,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
                 }],
                 metadata,
             };
-
-            main_track.translations.push(translation_track);
-        } else {
-            warn!("尝试向没有主内容轨道的 LyricLine 添加翻译轨道。");
+            track.translations.push(translation_track);
         }
     }
 
-    /// 添加罗马音轨道
-    /// 注意：此方法会将罗马音附加到找到的第一个主内容轨道上。
-    pub fn add_romanization_track(&mut self, text: String, scheme: Option<String>) {
-        if let Some(main_track) = self
+    /// 为该行中所有指定类型的内容轨道添加一个罗马音。
+    pub fn add_romanization(
+        &mut self,
+        content_type: ContentType,
+        text: impl Into<String>,
+        scheme: Option<&str>,
+    ) {
+        let text = text.into();
+        for track in self
             .tracks
             .iter_mut()
-            .find(|track| track.content_type == ContentType::Main)
+            .filter(|t| t.content_type == content_type)
         {
-            let syllable = LyricSyllable {
-                text,
-                start_ms: self.start_ms,
-                end_ms: self.end_ms,
-                duration_ms: Some(self.end_ms.saturating_sub(self.start_ms)),
-                ends_with_space: false,
-            };
-
             let mut metadata = HashMap::new();
-            if let Some(scheme_val) = scheme {
-                metadata.insert(TrackMetadataKey::Scheme, scheme_val);
+            if let Some(s) = scheme {
+                metadata.insert(TrackMetadataKey::Scheme, s.to_string());
             }
-
             let romanization_track = LyricTrack {
                 words: vec![Word {
-                    syllables: vec![syllable],
-                    furigana: None,
+                    syllables: vec![LyricSyllable {
+                        text: text.clone(),
+                        start_ms: self.start_ms,
+                        end_ms: self.end_ms,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
                 }],
                 metadata,
             };
-            main_track.romanizations.push(romanization_track);
-        } else {
-            warn!("尝试向没有主内容轨道的 LyricLine 添加罗马音轨道。");
+            track.romanizations.push(romanization_track);
         }
+    }
+
+    /// 移除所有指定类型的内容轨道及其所有注解。
+    pub fn clear_tracks(&mut self, content_type: ContentType) {
+        self.tracks.retain(|t| t.content_type != content_type);
     }
 }
 
@@ -583,6 +667,9 @@ pub struct ParsedSourceData {
     pub raw_metadata: HashMap<String, Vec<String>>,
     /// 解析的源文件格式。
     pub source_format: LyricFormat,
+    /// 从文件中解析出的所有演唱者信息。
+    #[serde(default)]
+    pub agents: AgentStore,
     /// 可选的原始文件名，可用于日志记录或某些特定转换逻辑。
     pub source_filename: Option<String>,
     /// 指示源文件是否是逐行歌词（例如LRC）。
@@ -960,6 +1047,40 @@ impl Default for AuxiliaryLineMatchingStrategy {
     }
 }
 
+/// 指定LRC中具有相同时间戳的行的角色
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LrcLineRole {
+    /// 主歌词
+    Main,
+    /// 翻译
+    Translation,
+    /// 罗马音
+    Romanization,
+}
+
+/// 定义如何处理LRC中具有相同时间戳的多行歌词的策略
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LrcSameTimestampStrategy {
+    /// [默认] 将文件顺序中的第一行视为主歌词，其余的都视为翻译。
+    #[default]
+    FirstIsMain,
+    /// 使用启发式算法自动判断主歌词、翻译和罗马音。
+    Heuristic,
+    /// 将每一行都视为一个独立的、并列的主歌词轨道。
+    AllAreMain,
+    /// 根据用户提供的角色列表，按顺序为每一行分配角色。
+    /// 列表的长度应与具有相同时间戳的行数相匹配。
+    UseRoleOrder(Vec<LrcLineRole>),
+}
+
+/// LRC 解析选项
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LrcParsingOptions {
+    /// 定义如何处理具有相同时间戳的多行歌词的策略。
+    #[serde(default)]
+    pub same_timestamp_strategy: LrcSameTimestampStrategy,
+}
+
 /// 统一管理所有格式的转换选项
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConversionOptions {
@@ -976,6 +1097,9 @@ pub struct ConversionOptions {
     /// LRC 转换选项
     #[serde(default)]
     pub lrc: LrcGenerationOptions,
+    /// LRC 解析选项
+    #[serde(default)]
+    pub lrc_parsing: LrcParsingOptions,
     /// 元数据移除选项
     pub metadata_stripper: MetadataStripperOptions,
     /// 简繁转换选项

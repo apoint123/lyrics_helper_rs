@@ -2,10 +2,11 @@ use lyrics_helper_rs::converter::{
     generators::ttml_generator::generate_ttml,
     processors::metadata_processor::MetadataStore,
     types::{
-        AnnotatedTrack, CanonicalMetadataKey, ContentType, LyricLine, LyricSyllable, LyricTrack,
-        TrackMetadataKey, TtmlGenerationOptions, TtmlTimingMode, Word,
+        AgentStore, AnnotatedTrack, CanonicalMetadataKey, ContentType, LyricLine, LyricSyllable,
+        LyricTrack, TrackMetadataKey, TtmlGenerationOptions, TtmlTimingMode, Word,
     },
 };
+
 use std::collections::HashMap;
 
 #[test]
@@ -60,7 +61,9 @@ fn test_generate_line_timed_snapshot() {
         ..Default::default()
     };
 
-    let ttml_output = generate_ttml(&lines, &metadata, &options).unwrap();
+    let agent_store = AgentStore::from_metadata_store(&metadata);
+    let ttml_output = generate_ttml(&lines, &metadata, &agent_store, &options).unwrap();
+
     insta::assert_snapshot!(ttml_output);
 }
 
@@ -68,7 +71,7 @@ fn test_generate_line_timed_snapshot() {
 fn test_generate_word_timed_with_agents_snapshot() {
     let lines = vec![
         LyricLine {
-            agent: Some("演唱者1号".to_string()),
+            agent: Some("v1".to_string()),
             start_ms: 5000,
             end_ms: 8200,
             tracks: vec![AnnotatedTrack {
@@ -99,7 +102,7 @@ fn test_generate_word_timed_with_agents_snapshot() {
             ..Default::default()
         },
         LyricLine {
-            agent: Some("合唱".to_string()),
+            agent: Some("v1000".to_string()),
             start_ms: 9000,
             end_ms: 12000,
             tracks: vec![AnnotatedTrack {
@@ -134,13 +137,19 @@ fn test_generate_word_timed_with_agents_snapshot() {
     metadata
         .add(&CanonicalMetadataKey::Songwriter.to_string(), "作曲家1号")
         .unwrap();
+
+    metadata.add("agent", "v1=演唱者1号").unwrap();
+    metadata.add("agent", "v1000=合唱").unwrap();
+
     let options = TtmlGenerationOptions {
         timing_mode: TtmlTimingMode::Word,
         use_apple_format_rules: true,
         format: true,
         ..Default::default()
     };
-    let ttml_output = generate_ttml(&lines, &metadata, &options).unwrap();
+    let agent_store = AgentStore::from_metadata_store(&metadata);
+    let ttml_output = generate_ttml(&lines, &metadata, &agent_store, &options).unwrap();
+
     insta::assert_snapshot!(ttml_output);
 }
 
@@ -174,7 +183,10 @@ fn test_auto_word_splitting_snapshot() {
         punctuation_weight: 0.1,
         ..Default::default()
     };
-    let ttml_output = generate_ttml(&lines, &Default::default(), &options).unwrap();
+    let metadata = Default::default();
+    let agent_store = AgentStore::from_metadata_store(&metadata);
+    let ttml_output = generate_ttml(&lines, &metadata, &agent_store, &options).unwrap();
+
     insta::assert_snapshot!(ttml_output);
 }
 
@@ -236,7 +248,10 @@ fn test_generate_timed_romanization_snapshot() {
         format: true,
         ..Default::default()
     };
-    let ttml_output = generate_ttml(&lines, &Default::default(), &options).unwrap();
+    let metadata = Default::default();
+    let agent_store = AgentStore::from_metadata_store(&metadata);
+    let ttml_output = generate_ttml(&lines, &metadata, &agent_store, &options).unwrap();
+
     insta::assert_snapshot!(ttml_output);
 }
 
@@ -298,6 +313,9 @@ fn test_generate_timed_translation_snapshot() {
         format: true,
         ..Default::default()
     };
-    let ttml_output = generate_ttml(&lines, &Default::default(), &options).unwrap();
+    let metadata = Default::default();
+    let agent_store = AgentStore::from_metadata_store(&metadata);
+    let ttml_output = generate_ttml(&lines, &metadata, &agent_store, &options).unwrap();
+
     insta::assert_snapshot!(ttml_output);
 }

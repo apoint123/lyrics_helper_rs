@@ -16,8 +16,8 @@ use crate::converter::{
     TrackMetadataKey,
     processors::metadata_processor::MetadataStore,
     types::{
-        CanonicalMetadataKey, ContentType, ConvertError, LyricLine, LyricSyllable, LyricTrack,
-        TtmlGenerationOptions, TtmlTimingMode,
+        Agent, AgentStore, AgentType, AnnotatedTrack, CanonicalMetadataKey, ContentType,
+        ConvertError, LyricLine, LyricSyllable, LyricTrack, TtmlGenerationOptions, TtmlTimingMode,
     },
     utils::normalize_text_whitespace,
 };
@@ -144,6 +144,7 @@ fn write_timed_tracks_to_head<W: std::io::Write>(
 pub fn generate_ttml(
     lines: &[LyricLine],
     metadata_store: &MetadataStore,
+    agent_store: &AgentStore,
     options: &TtmlGenerationOptions,
 ) -> Result<String, ConvertError> {
     let mut buffer = Vec::new();
@@ -154,10 +155,10 @@ pub fn generate_ttml(
     let result = if options.format {
         let mut writer =
             Writer::new_with_indent(Cursor::new(&mut buffer), indent_char, indent_size);
-        generate_ttml_inner(&mut writer, lines, metadata_store, options)
+        generate_ttml_inner(&mut writer, lines, metadata_store, agent_store, options)
     } else {
         let mut writer = Writer::new(Cursor::new(&mut buffer));
-        generate_ttml_inner(&mut writer, lines, metadata_store, options)
+        generate_ttml_inner(&mut writer, lines, metadata_store, agent_store, options)
     };
 
     result?;
@@ -170,28 +171,9 @@ fn generate_ttml_inner<W: std::io::Write>(
     writer: &mut Writer<W>,
     lines: &[LyricLine],
     metadata_store: &MetadataStore,
+    agent_store: &AgentStore,
     options: &TtmlGenerationOptions,
 ) -> Result<(), ConvertError> {
-    const CHORUS_KEYWORDS: &[&str] = &["合", "合唱"];
-
-    let mut agent_name_to_id_map: HashMap<String, String> = HashMap::new();
-    let mut next_agent_num = 1;
-
-    for line in lines {
-        if let Some(agent_name) = line.agent.as_ref().filter(|s| !s.is_empty())
-            && !agent_name_to_id_map.contains_key(agent_name)
-        {
-            let id_to_assign = if CHORUS_KEYWORDS.contains(&agent_name.to_lowercase().as_str()) {
-                "v1000".to_string()
-            } else {
-                let id = format!("v{next_agent_num}");
-                next_agent_num += 1;
-                id
-            };
-            agent_name_to_id_map.insert(agent_name.clone(), id_to_assign);
-        }
-    }
-
     // 准备根元素的属性
     let mut namespace_attrs: Vec<(&str, String)> = Vec::new();
     namespace_attrs.push(("xmlns", "http://www.w3.org/ns/ttml".to_string()));
@@ -262,19 +244,8 @@ fn generate_ttml_inner<W: std::io::Write>(
     }
 
     element_writer.write_inner_content(|writer| {
-        let to_io_err = |e: ConvertError| std::io::Error::other(e);
-
-        // 写入 <head> 和 <body>
-        write_ttml_head(
-            writer,
-            metadata_store,
-            lines,
-            options,
-            &agent_name_to_id_map,
-        )
-        .map_err(to_io_err)?;
-        write_ttml_body(writer, lines, options, &agent_name_to_id_map).map_err(to_io_err)?;
-
+        write_ttml_head(writer, metadata_store, lines, agent_store, options)?;
+        write_ttml_body(writer, lines, options)?;
         Ok(())
     })?;
 
@@ -285,8 +256,8 @@ fn write_ttml_head<W: std::io::Write>(
     writer: &mut Writer<W>,
     metadata_store: &MetadataStore,
     lines: &[LyricLine],
+    agent_store: &AgentStore,
     options: &TtmlGenerationOptions,
-    agent_map: &HashMap<String, String>,
 ) -> Result<(), ConvertError> {
     writer
         .create_element("head")
@@ -294,38 +265,41 @@ fn write_ttml_head<W: std::io::Write>(
             writer
                 .create_element("metadata")
                 .write_inner_content(|writer| {
-                    let mut sorted_agents: Vec<(&String, &String)> = agent_map.iter().collect();
-                    sorted_agents.sort_by_key(|&(_, v_id)| {
-                        v_id.strip_prefix('v')
-                            .and_then(|s| s.parse::<u32>().ok())
-                            .unwrap_or(u32::MAX)
-                    });
+                    let mut sorted_agents: Vec<_> = agent_store.all_agents().cloned().collect();
 
-                    if agent_map.is_empty() && !lines.is_empty() {
-                        writer
-                            .create_element("ttm:agent")
-                            .with_attribute(("type", "person"))
-                            .with_attribute(("xml:id", "v1"))
-                            .write_empty()?;
+                    if sorted_agents.is_empty() && !lines.is_empty() {
+                        // 如果没有 agent 但有歌词行，创建一个默认的
+                        sorted_agents.push(Agent {
+                            id: "v1".to_string(),
+                            name: None,
+                            agent_type: AgentType::Person,
+                        });
                     }
 
-                    for (original_name, v_id) in sorted_agents {
-                        let agent_type = if *v_id == "v1000" { "group" } else { "person" };
-                        let mut element_builder = writer.create_element("ttm:agent");
-                        element_builder = element_builder
-                            .with_attribute(("type", agent_type))
-                            .with_attribute(("xml:id", v_id.as_str()));
+                    sorted_agents.sort_by(|a, b| a.id.cmp(&b.id));
 
-                        if *v_id != "v1000" && !original_name.is_empty() {
-                            element_builder.write_inner_content(|writer| {
+                    for agent in sorted_agents {
+                        let type_str = match agent.agent_type {
+                            AgentType::Person => "person",
+                            AgentType::Group => "group",
+                            AgentType::Other => "other",
+                        };
+
+                        let agent_element = writer
+                            .create_element("ttm:agent")
+                            .with_attribute(("type", type_str))
+                            .with_attribute(("xml:id", agent.id.as_str()));
+
+                        if let Some(name) = &agent.name {
+                            agent_element.write_inner_content(|writer| {
                                 writer
                                     .create_element("ttm:name")
                                     .with_attribute(("type", "full"))
-                                    .write_text_content(BytesText::new(original_name))?;
+                                    .write_text_content(BytesText::new(name))?;
                                 Ok(())
                             })?;
                         } else {
-                            element_builder.write_empty()?;
+                            agent_element.write_empty()?;
                         }
                     }
 
@@ -515,7 +489,6 @@ fn write_ttml_body<W: std::io::Write>(
     writer: &mut Writer<W>,
     lines: &[LyricLine],
     options: &TtmlGenerationOptions,
-    agent_map: &HashMap<String, String>,
 ) -> Result<(), ConvertError> {
     let body_dur_ms = lines.iter().map(|line| line.end_ms).max().unwrap_or(0);
     let mut body_builder = writer.create_element("body");
@@ -537,28 +510,16 @@ fn write_ttml_body<W: std::io::Write>(
             } else {
                 let prev_line = *current_div_lines.last().unwrap();
                 if prev_line.song_part != current_line.song_part {
-                    write_div(
-                        writer,
-                        &current_div_lines,
-                        options,
-                        &mut p_key_counter,
-                        agent_map,
-                    )
-                    .map_err(std::io::Error::other)?;
+                    write_div(writer, &current_div_lines, options, &mut p_key_counter)
+                        .map_err(std::io::Error::other)?;
                     current_div_lines.clear();
                 }
                 current_div_lines.push(current_line);
             }
         }
         if !current_div_lines.is_empty() {
-            write_div(
-                writer,
-                &current_div_lines,
-                options,
-                &mut p_key_counter,
-                agent_map,
-            )
-            .map_err(std::io::Error::other)?;
+            write_div(writer, &current_div_lines, options, &mut p_key_counter)
+                .map_err(std::io::Error::other)?;
         }
         Ok(())
     })?;
@@ -571,7 +532,6 @@ fn write_div<W: std::io::Write>(
     part_lines: &[&LyricLine],
     options: &TtmlGenerationOptions,
     p_key_counter: &mut i32,
-    agent_map: &HashMap<String, String>,
 ) -> Result<(), ConvertError> {
     if part_lines.is_empty() {
         return Ok(());
@@ -597,11 +557,8 @@ fn write_div<W: std::io::Write>(
     div_builder.write_inner_content(|writer| {
         for line in part_lines {
             *p_key_counter += 1;
-            let agent_id_to_set = line
-                .agent
-                .as_ref()
-                .and_then(|name| agent_map.get(name))
-                .map_or("v1", |id| id.as_str());
+
+            let agent_id_to_set = line.agent.as_deref().unwrap_or("v1");
 
             writer
                 .create_element("p")
@@ -696,7 +653,7 @@ fn write_syllable_with_optional_splitting<W: std::io::Write>(
                 {
                     format!("{token} ")
                 } else {
-                    token.to_string()
+                    token.clone()
                 };
 
                 writer
@@ -727,11 +684,11 @@ fn write_p_content<W: std::io::Write>(
         .iter()
         .filter(|at| at.content_type == ContentType::Main)
         .collect();
-    let background_content_tracks: Vec<_> = line
+
+    let background_annotated_tracks: Vec<_> = line
         .tracks
         .iter()
         .filter(|at| at.content_type == ContentType::Background)
-        .map(|at| &at.content)
         .collect();
 
     // 1. 处理主内容
@@ -767,8 +724,8 @@ fn write_p_content<W: std::io::Write>(
     }
 
     // 3. 处理背景内容
-    if options.timing_mode == TtmlTimingMode::Word && !background_content_tracks.is_empty() {
-        write_background_tracks(writer, &background_content_tracks, options)?;
+    if options.timing_mode == TtmlTimingMode::Word && !background_annotated_tracks.is_empty() {
+        write_background_tracks(writer, &background_annotated_tracks, options)?;
     }
 
     Ok(())
@@ -845,12 +802,12 @@ fn write_track_as_spans<W: std::io::Write>(
 
 fn write_background_tracks<W: std::io::Write>(
     writer: &mut Writer<W>,
-    bg_tracks: &[&LyricTrack],
+    bg_annotated_tracks: &[&AnnotatedTrack],
     options: &TtmlGenerationOptions,
 ) -> Result<(), ConvertError> {
-    let all_syls: Vec<_> = bg_tracks
+    let all_syls: Vec<_> = bg_annotated_tracks
         .iter()
-        .flat_map(|t| t.words.iter().flat_map(|w| &w.syllables))
+        .flat_map(|at| at.content.words.iter().flat_map(|w| &w.syllables))
         .collect();
     if all_syls.is_empty() {
         return Ok(());
@@ -889,6 +846,18 @@ fn write_background_tracks<W: std::io::Write>(
                     writer.write_event(Event::Text(BytesText::new(" ")))?;
                 }
             }
+
+            for at in bg_annotated_tracks {
+                for track in &at.translations {
+                    write_inline_auxiliary_track(writer, track, "x-translation", options)
+                        .map_err(std::io::Error::other)?;
+                }
+                for track in &at.romanizations {
+                    write_inline_auxiliary_track(writer, track, "x-roman", options)
+                        .map_err(std::io::Error::other)?;
+                }
+            }
+
             Ok(())
         })?;
     Ok(())

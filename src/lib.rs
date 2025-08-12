@@ -843,7 +843,7 @@ mod integration_tests {
     use super::*;
     use crate::converter::generators::ttml_generator;
     use crate::converter::processors::metadata_processor::MetadataStore;
-    use crate::converter::types::TtmlGenerationOptions;
+    use crate::converter::types::{AgentStore, TtmlGenerationOptions};
 
     fn init_tracing() {
         use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -899,14 +899,14 @@ mod integration_tests {
         let parsed_data = full_lyrics_result.parsed;
 
         let has_main_lyric = !parsed_data.lines.is_empty();
-        let has_translation = parsed_data
-            .lines
-            .iter()
-            .any(|l| !l.get_translation_tracks().is_empty());
-        let has_romanization = parsed_data
-            .lines
-            .iter()
-            .any(|l| !l.get_romanization_tracks().is_empty());
+        let has_translation = parsed_data.lines.iter().any(|l| {
+            l.main_track()
+                .is_some_and(|track| !track.translations.is_empty())
+        });
+        let has_romanization = parsed_data.lines.iter().any(|l| {
+            l.main_track()
+                .is_some_and(|track| !track.romanizations.is_empty())
+        });
 
         assert!(has_main_lyric, "解析后的主歌词行不应为空");
         assert!(
@@ -915,30 +915,30 @@ mod integration_tests {
         );
 
         for line in parsed_data.lines.iter().take(5) {
-            let main_text = line.get_line_text().unwrap_or_default();
-            let translation_text =
-                line.get_translation_tracks()
-                    .first()
-                    .map_or("N/A".to_string(), |t| {
-                        t.words
-                            .iter()
-                            .flat_map(|w| &w.syllables)
-                            .map(|s| s.text.as_str())
-                            .collect::<Vec<_>>()
-                            .join("")
-                    });
+            let main_text = line.main_text().unwrap_or_default();
+            let translation_text = line
+                .main_track()
+                .and_then(|track| track.translations.first())
+                .map_or("N/A".to_string(), |t| {
+                    t.words
+                        .iter()
+                        .flat_map(|w| &w.syllables)
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("")
+                });
 
-            let romanization_text =
-                line.get_romanization_tracks()
-                    .first()
-                    .map_or("N/A".to_string(), |t| {
-                        t.words
-                            .iter()
-                            .flat_map(|w| &w.syllables)
-                            .map(|s| s.text.as_str())
-                            .collect::<Vec<_>>()
-                            .join("")
-                    });
+            let romanization_text = line
+                .main_track()
+                .and_then(|track| track.romanizations.first())
+                .map_or("N/A".to_string(), |t| {
+                    t.words
+                        .iter()
+                        .flat_map(|w| &w.syllables)
+                        .map(|s| s.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("")
+                });
 
             println!(
                 "  - 主歌词: {main_text}\n    翻译: {translation_text}\n    罗马音: {romanization_text}"
@@ -946,18 +946,22 @@ mod integration_tests {
         }
 
         println!("\n[INFO] 步骤 3: 将解析出的歌词数据转换为 TTML 格式...");
-        let metadata_store = MetadataStore::new();
-        // 暂时省略元数据部分
-        // for (key, values) in &parsed_data.raw_metadata { ... }
+        let metadata_store = MetadataStore::from(&parsed_data);
+
+        let agent_store = AgentStore::from_metadata_store(&metadata_store);
 
         let ttml_options = TtmlGenerationOptions {
             format: false,
             ..Default::default()
         };
 
-        let ttml_output =
-            ttml_generator::generate_ttml(&parsed_data.lines, &metadata_store, &ttml_options)
-                .expect("生成 TTML 失败");
+        let ttml_output = ttml_generator::generate_ttml(
+            &parsed_data.lines,
+            &metadata_store,
+            &agent_store,
+            &ttml_options,
+        )
+        .expect("生成 TTML 失败");
 
         assert!(ttml_output.starts_with("<tt"), "输出应为有效的 TTML 字符串");
 

@@ -1118,7 +1118,14 @@ mod tests {
 
         assert!(!lyrics.parsed.lines.is_empty(), "KRC 解析结果不应为空。");
         assert!(
-            !lyrics.parsed.lines[0].get_main_syllables().is_empty(),
+            lyrics.parsed.lines[0].main_track().map_or(0, |track| {
+                track
+                    .content
+                    .words
+                    .iter()
+                    .flat_map(|word| &word.syllables)
+                    .count()
+            }) > 0,
             "KRC 歌词应包含音节。"
         );
 

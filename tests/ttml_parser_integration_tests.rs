@@ -1,10 +1,11 @@
 use lyrics_helper_rs::converter::{
+    LyricSyllable,
     generators::ttml_generator::generate_ttml,
     parsers::ttml_parser::parse_ttml,
     processors::metadata_processor::MetadataStore,
     types::{
-        ContentType, LyricLine, LyricTrack, TrackMetadataKey, TtmlGenerationOptions,
-        TtmlParsingOptions, TtmlTimingMode,
+        AgentStore, AgentType, ContentType, ConvertError, LyricLine, LyricTrack, TrackMetadataKey,
+        TtmlGenerationOptions, TtmlParsingOptions, TtmlTimingMode,
     },
 };
 
@@ -103,18 +104,22 @@ fn test_metadata_extraction() {
     assert_eq!(metadata.get("songwriters").unwrap().len(), 2);
     assert_eq!(metadata.get("songwriters").unwrap()[0], "作曲者1号");
 
-    assert!(
-        metadata
-            .get("agent")
-            .unwrap()
-            .contains(&"v1=演唱者1号".to_string())
-    );
-    assert!(
-        metadata
-            .get("agent")
-            .unwrap()
-            .contains(&"v2=演唱者2号".to_string())
-    );
+    let agent_store = &result.agents;
+    assert_eq!(agent_store.agents_by_id.len(), 2, "应该解析出两个 aget");
+
+    let agent_v1 = agent_store
+        .agents_by_id
+        .get("v1")
+        .expect("应该找到 ID 为 v1 的 agent");
+    assert_eq!(agent_v1.name.as_deref(), Some("演唱者1号"));
+    assert_eq!(agent_v1.agent_type, AgentType::Person);
+
+    let agent_v2 = agent_store
+        .agents_by_id
+        .get("v2")
+        .expect("应该找到 ID 为 v2 的 agent");
+    assert_eq!(agent_v2.name.as_deref(), Some("演唱者2号"));
+    assert_eq!(agent_v2.agent_type, AgentType::Person);
 }
 
 #[test]
@@ -193,8 +198,9 @@ fn test_round_trip() {
         ..Default::default()
     };
 
+    let agent_store = AgentStore::from_metadata_store(&metadata_store);
     let generated_ttml_output =
-        generate_ttml(&parsed_data.lines, &metadata_store, &options).unwrap();
+        generate_ttml(&parsed_data.lines, &metadata_store, &agent_store, &options).unwrap();
 
     insta::assert_snapshot!(generated_ttml_output);
 }
@@ -219,7 +225,17 @@ fn test_parse_formatted_ttml() {
         "场景1: 应该检测到格式化输入"
     );
     let line1 = &result1.lines[0];
-    let main_syllables1 = line1.get_main_syllables();
+    let main_syllables1: Vec<&LyricSyllable> = line1
+        .main_track()
+        .map(|track| {
+            track
+                .content
+                .words
+                .iter()
+                .flat_map(|word| &word.syllables)
+                .collect()
+        })
+        .unwrap_or_default();
     assert_eq!(main_syllables1.len(), 2);
     assert!(
         !main_syllables1[0].ends_with_space,
@@ -243,7 +259,17 @@ fn test_parse_formatted_ttml() {
         "场景2: 应该检测到格式化输入"
     );
     let line2 = &result2.lines[0];
-    let main_syllables2 = line2.get_main_syllables();
+    let main_syllables2: Vec<&LyricSyllable> = line2
+        .main_track()
+        .map(|track| {
+            track
+                .content
+                .words
+                .iter()
+                .flat_map(|word| &word.syllables)
+                .collect()
+        })
+        .unwrap_or_default();
     assert!(
         main_syllables2[0].ends_with_space,
         "场景2: 'Hello' 后面应该有空格"
@@ -258,7 +284,17 @@ fn test_parse_formatted_ttml() {
     .unwrap();
 
     let line3 = &result3.lines[0];
-    let main_syllables3 = line3.get_main_syllables();
+    let main_syllables3: Vec<&LyricSyllable> = line3
+        .main_track()
+        .map(|track| {
+            track
+                .content
+                .words
+                .iter()
+                .flat_map(|word| &word.syllables)
+                .collect()
+        })
+        .unwrap_or_default();
     assert!(
         main_syllables3[0].ends_with_space,
         "场景3: 在未格式化输入中，'Hello' 后面应该有空格"
@@ -283,7 +319,17 @@ fn test_parse_formatted_ttml() {
         "场景4: 应该检测到格式化输入"
     );
     let line4 = &result4.lines[0];
-    let main_syllables4 = line4.get_main_syllables();
+    let main_syllables4: Vec<&LyricSyllable> = line4
+        .main_track()
+        .map(|track| {
+            track
+                .content
+                .words
+                .iter()
+                .flat_map(|word| &word.syllables)
+                .collect()
+        })
+        .unwrap_or_default();
     assert_eq!(main_syllables4.len(), 3);
     assert!(
         !main_syllables4[0].ends_with_space,
@@ -295,19 +341,18 @@ fn test_parse_formatted_ttml() {
     );
 }
 
-// 暂时不运行这个测试，因为格式错误也能继续解析
-// #[test]
-// fn test_fatal_error_on_invalid_xml() {
-//     let content = load_test_data("invalid_xml.xml");
-//     let result = parse_ttml(&content, &DefaultLanguageOptions::default());
+#[test]
+fn test_fatal_error_on_invalid_xml() {
+    let content = load_test_data("invalid_xml.ttml");
+    let result = parse_ttml(&content, &Default::default());
 
-//     assert!(result.is_err(), "解析XML应该报错");
+    assert!(result.is_err(), "解析XML应该报错");
 
-//     assert!(
-//         matches!(result.unwrap_err(), ConvertError::Xml(_)),
-//         "错误类型应该为 ConvertError::Xml"
-//     );
-// }
+    assert!(
+        matches!(result.unwrap_err(), ConvertError::Xml(_)),
+        "错误类型应该为 ConvertError::Xml"
+    );
+}
 
 #[test]
 fn test_parse_line_timed_translation() {
@@ -401,7 +446,10 @@ fn test_parse_timed_romanization() {
     assert_eq!(result.lines.len(), 1, "应该解析出一行歌词");
     let line = &result.lines[0];
 
-    let romanization_tracks = line.get_romanization_tracks();
+    let romanization_tracks: Vec<&LyricTrack> = line
+        .main_track()
+        .map(|track| track.romanizations.iter().collect())
+        .unwrap_or_default();
     assert_eq!(romanization_tracks.len(), 1, "应该有一组逐字罗马音");
     let romanization_track = romanization_tracks[0];
     let romanization_syllables: Vec<_> = romanization_track
@@ -456,7 +504,10 @@ fn test_parse_timed_translation() {
     assert_eq!(result.lines.len(), 1, "应该解析出一行歌词");
     let line = &result.lines[0];
 
-    let translation_tracks = line.get_translation_tracks();
+    let translation_tracks: Vec<&LyricTrack> = line
+        .main_track()
+        .map(|track| track.translations.iter().collect())
+        .unwrap_or_default();
     assert_eq!(translation_tracks.len(), 1, "应该有一组逐字翻译");
     let translation_track = translation_tracks[0];
     let translation_syllables: Vec<_> = translation_track
@@ -561,4 +612,25 @@ fn test_parse_apple_music_timed_auxiliary_tracks() {
     assert_eq!(bg_roman_syls.len(), 2);
     assert_eq!(bg_roman_syls[0].text, "heungmiroul");
     assert_eq!(bg_roman_syls[1].text, "ppun");
+}
+
+#[test]
+fn test_complex_round_trip() {
+    let content = load_test_data("complex_round_trip.ttml");
+    let parsed_data = parse_ttml(&content, &TtmlParsingOptions::default()).unwrap();
+
+    let agent_store = &parsed_data.agents;
+
+    let metadata_store = MetadataStore::from(&parsed_data);
+
+    let options = TtmlGenerationOptions {
+        timing_mode: TtmlTimingMode::Word,
+        format: true,
+        ..Default::default()
+    };
+
+    let generated_ttml_output =
+        generate_ttml(&parsed_data.lines, &metadata_store, agent_store, &options).unwrap();
+
+    insta::assert_snapshot!(generated_ttml_output);
 }

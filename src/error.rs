@@ -81,6 +81,12 @@ pub enum LyricsHelperError {
     ProvidersNotInitialized,
 }
 
+impl From<ConvertError> for std::io::Error {
+    fn from(err: ConvertError) -> Self {
+        std::io::Error::other(err)
+    }
+}
+
 /// `LyricsHelperError` 的 `Result` 类型别名，方便在函数签名中使用。
 pub type Result<T> = std::result::Result<T, LyricsHelperError>;
 

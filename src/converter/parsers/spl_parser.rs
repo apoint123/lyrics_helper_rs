@@ -255,7 +255,16 @@ pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
     }
 
     lines.sort_by_key(|l| l.start_ms);
-    let is_line_timed = !lines.iter().any(|l| l.get_main_syllables().len() > 1);
+    let is_line_timed = !lines.iter().any(|l| {
+        l.main_track().map_or(0, |track| {
+            track
+                .content
+                .words
+                .iter()
+                .flat_map(|word| &word.syllables)
+                .count()
+        }) > 1
+    });
 
     Ok(ParsedSourceData {
         lines,
