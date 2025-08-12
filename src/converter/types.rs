@@ -269,14 +269,19 @@ pub struct AnnotatedTrack {
     pub romanizations: Vec<LyricTrack>,
 }
 
+/// 表示一位演唱者的类型。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AgentType {
     #[default]
+    /// 单人演唱。
     Person,
+    /// 合唱。
     Group,
+    /// 未指定或其它类型。
     Other,
 }
 
+/// 表示歌词中的演唱者。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Agent {
     /// 内部ID, 例如 "v1"
@@ -287,8 +292,10 @@ pub struct Agent {
     pub agent_type: AgentType,
 }
 
+/// 用于存储歌词轨道中识别到的所有演唱者。
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentStore {
+    /// 从 ID 到演唱者结构体的映射。
     pub agents_by_id: HashMap<String, Agent>,
 }
 

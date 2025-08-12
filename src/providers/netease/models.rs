@@ -238,3 +238,31 @@ pub struct AlbumContentResult {
     /// 专辑包含的歌曲列表。
     pub songs: Vec<Song>,
 }
+
+// =================================================================
+// 歌曲播放链接接口 V1 (`/eapi/song/enhance/player/url/v1`) 的模型
+// =================================================================
+
+/// 获取歌曲播放链接 API (EAPI v1) 的顶层响应。
+#[derive(Debug, Deserialize)]
+pub struct SongUrlResultV1 {
+    /// 包含播放链接信息的数据列表。
+    pub data: Vec<SongUrlDataV1>,
+    /// API 返回码，`200` 表示成功。
+    pub code: i32,
+}
+
+/// 单个歌曲的播放链接信息 (EAPI v1)。
+#[derive(Debug, Deserialize)]
+pub struct SongUrlDataV1 {
+    /// 歌曲的数字 ID。
+    pub id: u64,
+    /// 歌曲的播放 URL。对于无版权或 VIP 歌曲，此字段可能为 `null`。
+    pub url: Option<String>,
+    /// 该条目自身的返回码，`200` 表示成功获取链接。
+    pub code: i32,
+    /// 音质等级
+    pub level: Option<String>,
+    /// 文件大小
+    pub size: u64,
+}

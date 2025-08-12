@@ -1,8 +1,11 @@
 //! 此模块实现了与网易云音乐平台进行交互的 `Provider`。
 //! API 来源于 <https://github.com/NeteaseCloudMusicApiReborn/api>
 
+use std::fmt::Write;
+
 use async_trait::async_trait;
 use chrono::Utc;
+use rand::Rng;
 use reqwest::{
     Client,
     header::{CONTENT_TYPE, COOKIE, HeaderMap, HeaderValue, REFERER, USER_AGENT},
@@ -61,6 +64,27 @@ impl Default for ClientConfig {
         }
     }
 }
+
+#[derive(Serialize)]
+struct PayloadHeader<'a> {
+    os: &'a str,
+    appver: &'a str,
+    osver: &'a str,
+    #[serde(rename = "deviceId")]
+    device_id: &'a str,
+    #[serde(rename = "requestId")]
+    request_id: String,
+}
+
+#[derive(Serialize)]
+struct EapiPayload<'a> {
+    ids: Vec<&'a str>,
+    level: &'a str,
+    #[serde(rename = "encodeType")]
+    encode_type: &'a str,
+    header: String,
+}
+
 /// 网易云音乐的客户端实现。
 ///
 /// 内部持有了为 WEAPI 请求生成的、一次性的随机密钥。
@@ -70,13 +94,15 @@ pub struct NeteaseClient {
     weapi_secret_key: String,
     /// 使用 RSA 公钥加密 `weapi_secret_key` 后得到的结果，作为请求的一部分发送。
     weapi_enc_sec_key: String,
+    /// 用户的 Cookie，用于访问需要登录的接口
+    cookie: Option<String>,
     http_client: Client,
     config: ClientConfig,
 }
 
 impl NeteaseClient {
     /// 创建一个新的 `NeteaseClient` 实例。
-    fn new(config: ClientConfig) -> Result<Self> {
+    fn new(config: ClientConfig, cookie: Option<String>) -> Result<Self> {
         let weapi_secret_key = crypto::create_secret_key(16);
         let weapi_enc_sec_key = crypto::rsa_encode(
             &weapi_secret_key,
@@ -87,6 +113,7 @@ impl NeteaseClient {
         Ok(Self {
             weapi_secret_key,
             weapi_enc_sec_key,
+            cookie,
             http_client,
             config,
         })
@@ -94,7 +121,12 @@ impl NeteaseClient {
 
     /// 一个便捷的默认构造函数
     pub fn new_default() -> Result<Self> {
-        Self::new(ClientConfig::default())
+        Self::new(ClientConfig::default(), None)
+    }
+
+    /// 一个便捷的带 Cookie 的构造函数
+    pub fn new_with_cookie(cookie: String) -> Result<Self> {
+        Self::new(ClientConfig::default(), Some(cookie))
     }
 
     /// 辅助函数，用于发送加密的 WEAPI 请求。
@@ -124,11 +156,22 @@ impl NeteaseClient {
 
         let user_agent = get_user_agent(self.config.client_type);
 
-        let cookie_str = format!(
+        let mut cookie_str = format!(
             "os=pc; osver={}; appver={}; __remember_me=true",
             self.config.os_version.as_deref().unwrap_or(""),
             self.config.app_version.as_deref().unwrap_or("")
         );
+
+        if let Some(user_cookie) = &self.cookie {
+            cookie_str.push_str("; ");
+            if user_cookie.to_lowercase().contains("music_u=") {
+                cookie_str.push_str(user_cookie);
+            } else {
+                write!(cookie_str, "MUSIC_U={user_cookie}")
+                    .map_err(|e| LyricsHelperError::Internal(e.to_string()))?;
+            }
+        }
+
         let cookie_value = cookie_str
             .parse::<HeaderValue>()
             .map_err(|e| LyricsHelperError::ApiError(format!("无法解析 WEAPI COOKIE: {e}")))?;
@@ -180,21 +223,15 @@ impl NeteaseClient {
 
         let user_agent = get_user_agent(self.config.client_type);
 
-        let header_obj = self.build_eapi_header();
-        let cookie_str = header_obj.as_object().map_or_else(String::new, |map| {
-            map.iter()
-                .filter_map(|(k, v)| {
-                    v.as_str().and_then(|s| {
-                        if s.is_empty() {
-                            None
-                        } else {
-                            Some(format!("{k}={s}"))
-                        }
-                    })
-                })
-                .collect::<Vec<_>>()
-                .join("; ")
-        });
+        let mut cookie_parts = vec!["os=pc".to_string(), "appver=8.9.75".to_string()];
+        if let Some(user_cookie) = &self.cookie {
+            if user_cookie.to_lowercase().contains("music_u=") {
+                cookie_parts.push(user_cookie.clone());
+            } else {
+                cookie_parts.push(format!("MUSIC_U={user_cookie}"));
+            }
+        }
+        let cookie_str = cookie_parts.join("; ");
 
         let cookie_value = cookie_str
             .parse::<HeaderValue>()
@@ -243,8 +280,66 @@ impl NeteaseClient {
             "channel": config.channel.as_deref().unwrap_or(""),
             "requestId": format!("{}_{:04}", current_time_ms, rand::random::<u16>() % 1000),
             "__csrf": "",
-            "MUSIC_U": "",
+            "MUSIC_U": self.cookie.as_deref().unwrap_or(""),
         })
+    }
+
+    /// 使用 EAPI 获取歌曲链接，可用于 VIP 歌曲。
+    pub async fn get_song_link_v1(&self, song_id: &str) -> Result<String> {
+        let url_path_for_encrypt = "/api/song/enhance/player/url/v1";
+        let full_url_for_request =
+            "https://interface3.music.163.com/eapi/song/enhance/player/url/v1";
+
+        let request_id = rand::rng()
+            .random_range(10_000_000..100_000_000)
+            .to_string();
+        let header_struct = PayloadHeader {
+            os: "pc",
+            appver: "",
+            osver: "",
+            device_id: "pyncm!",
+            request_id,
+        };
+        let header_str = serde_json::to_string(&header_struct).map_err(|e| {
+            LyricsHelperError::Internal(format!("序列化 EAPI payload header 失败: {e}"))
+        })?;
+
+        let payload_struct = EapiPayload {
+            ids: vec![song_id],
+            level: "standard",
+            encode_type: "flac",
+            header: header_str,
+        };
+
+        let resp: models::SongUrlResultV1 = self
+            .post_eapi(url_path_for_encrypt, full_url_for_request, &payload_struct)
+            .await?;
+
+        if resp.code != 200 {
+            return Err(LyricsHelperError::ApiError(format!(
+                "获取播放链接失败，接口返回状态码: {}",
+                resp.code
+            )));
+        }
+
+        let song_data = resp
+            .data
+            .into_iter()
+            .find(|d| d.id.to_string() == song_id)
+            .ok_or(LyricsHelperError::LyricNotFound)?;
+
+        if song_data.code == 200 {
+            song_data.url.ok_or_else(|| {
+                LyricsHelperError::ApiError(
+                    "获取播放链接失败，可能因 VIP 或版权问题无链接。".into(),
+                )
+            })
+        } else {
+            Err(LyricsHelperError::ApiError(format!(
+                "获取播放链接失败，歌曲接口返回状态码: {}",
+                song_data.code
+            )))
+        }
     }
 }
 
@@ -883,4 +978,31 @@ mod tests {
         );
         println!("✅ 专辑分页测试通过。");
     }
+
+    // 没开 VIP，不测了
+    // #[tokio::test]
+    // #[ignore]
+    // async fn test_get_song_link_v1_vip() {
+    //     const VIP_SONG_ID: &str = "1847975477";
+
+    //     let cookie =
+    //         std::env::var("NETEASE_COOKIE").expect("请设置 NETEASE_COOKIE 环境变量");
+
+    //     let provider = NeteaseClient::new_with_cookie(cookie).unwrap();
+
+    //     let link_result = provider.get_song_link_v1(VIP_SONG_ID).await;
+
+    //     match link_result {
+    //         Ok(link) => {
+    //             assert!(link.starts_with("http"), "返回的链接应以 http/https 开头");
+    //             println!(
+    //                 "✅ 测试 get_song_link_v1 (VIP) 通过: 获取到链接: {}",
+    //                 &link
+    //             );
+    //         }
+    //         Err(e) => {
+    //             panic!("获取 VIP 歌曲链接失败: {e:?}");
+    //         }
+    //     }
+    // }
 }
