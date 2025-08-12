@@ -702,7 +702,7 @@ fn handle_global_event(
                             final_agent_id = Some(existing_id.clone());
                         } else {
                             state.agent_counter += 1;
-                            let new_id = format!("p{}", state.agent_counter);
+                            let new_id = format!("v{}", state.agent_counter);
 
                             state
                                 .agent_name_to_id_map
