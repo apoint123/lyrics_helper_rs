@@ -5,11 +5,14 @@ use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::converter::types::{LrcLineRole, LrcParsingOptions, LrcSameTimestampStrategy};
+use crate::converter::types::{
+    LrcLineRole, LrcParsingOptions, LrcSameTimestampStrategy, LyricLineBuilder,
+    LyricSyllableBuilder,
+};
 use crate::converter::{
     types::{
-        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
-        LyricTrack, ParsedSourceData, Word,
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricTrack,
+        ParsedSourceData, Word,
     },
     utils::{normalize_text_whitespace, parse_and_store_metadata},
 };
@@ -241,12 +244,13 @@ pub fn parse_lrc(
         };
 
         if !tracks.is_empty() {
-            final_lyric_lines.push(LyricLine {
-                tracks,
-                start_ms,
-                end_ms,
-                ..Default::default()
-            });
+            let line = LyricLineBuilder::default()
+                .tracks(tracks)
+                .start_ms(start_ms)
+                .end_ms(end_ms)
+                .build()
+                .unwrap();
+            final_lyric_lines.push(line);
         }
 
         i = next_event_index;
@@ -265,12 +269,15 @@ pub fn parse_lrc(
 fn new_line_timed_track(text: String, start_ms: u64, end_ms: u64) -> LyricTrack {
     LyricTrack {
         words: vec![Word {
-            syllables: vec![LyricSyllable {
-                text,
-                start_ms,
-                end_ms,
-                ..Default::default()
-            }],
+            syllables: vec![
+                LyricSyllableBuilder::default()
+                    .text(text)
+                    .start_ms(start_ms)
+                    .end_ms(end_ms)
+                    .build()
+                    .unwrap(),
+            ],
+
             ..Default::default()
         }],
         ..Default::default()

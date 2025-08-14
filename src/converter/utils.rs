@@ -115,7 +115,7 @@ pub(crate) fn normalize_text_whitespace(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::converter::types::LyricSyllable;
+    use crate::converter::types::{LyricSyllable, LyricSyllableBuilder};
 
     // 处理一个正常的音节
     #[test]
@@ -132,10 +132,13 @@ mod tests {
     // 处理一个带前导空格的音节
     #[test]
     fn test_process_syllable_with_leading_space() {
-        let mut syllables = vec![LyricSyllable {
-            text: "previous".to_string(),
-            ..Default::default()
-        }];
+        let mut syllables = vec![
+            LyricSyllableBuilder::default()
+                .text("previous")
+                .build()
+                .unwrap(),
+        ];
+
         let raw_text = " word";
 
         let result = process_syllable_text(raw_text, &mut syllables);
@@ -163,10 +166,12 @@ mod tests {
     // 处理一个同时带前导和尾随空格的音节
     #[test]
     fn test_process_syllable_with_both_spaces() {
-        let mut syllables = vec![LyricSyllable {
-            text: "previous".to_string(),
-            ..Default::default()
-        }];
+        let mut syllables = vec![
+            LyricSyllableBuilder::default()
+                .text("previous")
+                .build()
+                .unwrap(),
+        ];
         let raw_text = " word ";
 
         let result = process_syllable_text(raw_text, &mut syllables);
@@ -182,10 +187,12 @@ mod tests {
     // 处理纯空格
     #[test]
     fn test_pure_whitespace_slice_modifies_previous() {
-        let mut syllables = vec![LyricSyllable {
-            text: "previous".to_string(),
-            ..Default::default()
-        }];
+        let mut syllables = vec![
+            LyricSyllableBuilder::default()
+                .text("previous")
+                .build()
+                .unwrap(),
+        ];
         let raw_text = "   ";
 
         let result = process_syllable_text(raw_text, &mut syllables);
@@ -239,11 +246,14 @@ mod tests {
     // 对一个已经有尾随空格的音节，再次添加空格
     #[test]
     fn test_space_is_idempotent() {
-        let mut syllables = vec![LyricSyllable {
-            text: "previous".to_string(),
-            ends_with_space: true,
-            ..Default::default()
-        }];
+        let mut syllables = vec![
+            LyricSyllableBuilder::default()
+                .text("previous")
+                .ends_with_space(true)
+                .build()
+                .unwrap(),
+        ];
+
         let raw_text = " ";
 
         let result = process_syllable_text(raw_text, &mut syllables);

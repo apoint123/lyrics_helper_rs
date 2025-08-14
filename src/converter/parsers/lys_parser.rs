@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use crate::converter::{
     types::{
-        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
-        LyricTrack, ParsedSourceData, Word, lys_properties,
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricLineBuilder,
+        LyricSyllable, LyricSyllableBuilder, LyricTrack, ParsedSourceData, Word, lys_properties,
     },
     utils::{parse_and_store_metadata, process_syllable_text},
 };
@@ -48,13 +48,16 @@ fn parse_lys_line(line_str: &str, line_num: usize) -> Result<(u8, LyricLine), Co
             let duration_ms: u64 = ts_cap["duration"].parse()?;
             let end_ms = start_ms + duration_ms;
 
-            syllables.push(LyricSyllable {
-                text: clean_text,
-                start_ms,
-                end_ms,
-                duration_ms: Some(duration_ms),
-                ends_with_space,
-            });
+            let syllable = LyricSyllableBuilder::default()
+                .text(clean_text)
+                .start_ms(start_ms)
+                .end_ms(end_ms)
+                .duration_ms(duration_ms)
+                .ends_with_space(ends_with_space)
+                .build()
+                .unwrap();
+            syllables.push(syllable);
+
             min_start_ms = min_start_ms.min(start_ms);
             max_end_ms = max_end_ms.max(end_ms);
         }
@@ -77,22 +80,24 @@ fn parse_lys_line(line_str: &str, line_num: usize) -> Result<(u8, LyricLine), Co
         ..Default::default()
     };
 
+    // 后续逻辑会判断是否要将其转为 Background
     let annotated_track = AnnotatedTrack {
         content_type: ContentType::Main,
         content: content_track,
         ..Default::default()
     };
 
-    let line = LyricLine {
-        start_ms: if min_start_ms == u64::MAX {
+    let line = LyricLineBuilder::default()
+        .start_ms(if min_start_ms == u64::MAX {
             0
         } else {
             min_start_ms
-        },
-        end_ms: max_end_ms,
-        tracks: vec![annotated_track],
-        ..Default::default()
-    };
+        })
+        .end_ms(max_end_ms)
+        .track(annotated_track)
+        .build()
+        .unwrap();
+
     Ok((property, line))
 }
 
@@ -192,13 +197,14 @@ mod tests {
     use crate::converter::types::LyricSyllable;
 
     fn new_syllable(text: &str, start: u64, end: u64, space: bool) -> LyricSyllable {
-        LyricSyllable {
-            text: text.to_string(),
-            start_ms: start,
-            end_ms: end,
-            duration_ms: Some(end - start),
-            ends_with_space: space,
-        }
+        LyricSyllableBuilder::default()
+            .text(text.to_string())
+            .start_ms(start)
+            .end_ms(end)
+            .duration_ms(end - start)
+            .ends_with_space(space)
+            .build()
+            .unwrap()
     }
 
     #[test]

@@ -5,7 +5,7 @@ use lyrics_helper_rs::converter::{
     processors::metadata_processor::MetadataStore,
     types::{
         AgentStore, AgentType, ContentType, ConvertError, LyricLine, LyricTrack, TrackMetadataKey,
-        TtmlGenerationOptions, TtmlParsingOptions, TtmlTimingMode,
+        TtmlGenerationOptionsBuilder, TtmlParsingOptions, TtmlTimingMode,
     },
 };
 
@@ -188,15 +188,16 @@ fn test_round_trip() {
         }
     }
 
-    let options = TtmlGenerationOptions {
-        timing_mode: if parsed_data.is_line_timed_source {
-            TtmlTimingMode::Line
-        } else {
-            TtmlTimingMode::Word
-        },
-        format: true,
-        ..Default::default()
+    let timing_mode = if parsed_data.is_line_timed_source {
+        TtmlTimingMode::Line
+    } else {
+        TtmlTimingMode::Word
     };
+    let options = TtmlGenerationOptionsBuilder::default()
+        .timing_mode(timing_mode)
+        .format(true)
+        .build()
+        .unwrap();
 
     let agent_store = AgentStore::from_metadata_store(&metadata_store);
     let generated_ttml_output =
@@ -623,11 +624,11 @@ fn test_complex_round_trip() {
 
     let metadata_store = MetadataStore::from(&parsed_data);
 
-    let options = TtmlGenerationOptions {
-        timing_mode: TtmlTimingMode::Word,
-        format: true,
-        ..Default::default()
-    };
+    let options = TtmlGenerationOptionsBuilder::default()
+        .timing_mode(TtmlTimingMode::Word)
+        .format(true)
+        .build()
+        .unwrap();
 
     let generated_ttml_output =
         generate_ttml(&parsed_data.lines, &metadata_store, agent_store, &options).unwrap();

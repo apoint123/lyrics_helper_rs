@@ -6,8 +6,8 @@ use std::sync::LazyLock;
 
 use crate::converter::{
     types::{
-        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
-        LyricTrack, ParsedSourceData, Word,
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricLineBuilder,
+        LyricSyllableBuilder, LyricTrack, ParsedSourceData, Word,
     },
     utils::normalize_text_whitespace,
 };
@@ -46,13 +46,15 @@ pub fn parse_lyl(content: &str) -> Result<ParsedSourceData, ConvertError> {
 
             let main_content_track = LyricTrack {
                 words: vec![Word {
-                    syllables: vec![LyricSyllable {
-                        text,
-                        start_ms,
-                        end_ms,
-                        duration_ms: Some(end_ms.saturating_sub(start_ms)),
-                        ..Default::default()
-                    }],
+                    syllables: vec![
+                        LyricSyllableBuilder::default()
+                            .text(text)
+                            .start_ms(start_ms)
+                            .end_ms(end_ms)
+                            .build()
+                            .unwrap(),
+                    ],
+
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -65,12 +67,13 @@ pub fn parse_lyl(content: &str) -> Result<ParsedSourceData, ConvertError> {
                 romanizations: vec![],
             };
 
-            lines.push(LyricLine {
-                tracks: vec![annotated_track],
-                start_ms,
-                end_ms,
-                ..Default::default()
-            });
+            let line = LyricLineBuilder::default()
+                .track(annotated_track)
+                .start_ms(start_ms)
+                .end_ms(end_ms)
+                .build()
+                .unwrap();
+            lines.push(line);
         } else {
             warnings.push(format!("第 {line_num} 行: 未能识别的行格式。"));
         }

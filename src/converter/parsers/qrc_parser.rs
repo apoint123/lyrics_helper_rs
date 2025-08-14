@@ -5,7 +5,7 @@
 use crate::converter::{
     types::{
         AnnotatedTrack, ContentType, ConvertError, FuriganaSyllable, LyricFormat, LyricLine,
-        LyricSyllable, LyricTrack, ParsedSourceData, Word,
+        LyricLineBuilder, LyricSyllable, LyricSyllableBuilder, LyricTrack, ParsedSourceData, Word,
     },
     utils::{parse_and_store_metadata, process_syllable_text},
 };
@@ -199,13 +199,15 @@ fn process_lyric_token(
 
     matched_words.push(MatchedWord {
         word: Word {
-            syllables: vec![LyricSyllable {
-                text: clean_text.to_string(),
-                start_ms: lyric_token.start_ms,
-                end_ms: lyric_token.end_ms,
-                ends_with_space: has_trailing_space,
-                ..Default::default()
-            }],
+            syllables: vec![
+                LyricSyllableBuilder::default()
+                    .text(clean_text)
+                    .start_ms(lyric_token.start_ms)
+                    .end_ms(lyric_token.end_ms)
+                    .ends_with_space(has_trailing_space)
+                    .build()
+                    .unwrap(),
+            ],
             furigana,
         },
         line_index: line_idx,
@@ -233,15 +235,16 @@ fn group_words_into_lines(matched_words: Vec<MatchedWord>) -> Vec<LyricLine> {
             words: line_words,
             ..Default::default()
         };
-        lines.push(LyricLine {
-            start_ms: content_track.words.first().unwrap().syllables[0].start_ms,
-            end_ms: content_track.words.last().unwrap().syllables[0].end_ms,
-            tracks: vec![AnnotatedTrack {
+        let line = LyricLineBuilder::default()
+            .start_ms(content_track.words.first().unwrap().syllables[0].start_ms)
+            .end_ms(content_track.words.last().unwrap().syllables[0].end_ms)
+            .track(AnnotatedTrack {
                 content: content_track,
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            })
+            .build()
+            .unwrap();
+        lines.push(line);
     }
     lines
 }
@@ -346,13 +349,15 @@ fn parse_single_qrc_line(line_str: &str) -> Option<(LyricLine, bool)> {
         {
             let start_ms: u64 = captures["start"].parse().ok()?;
             let duration_ms: u64 = captures["duration"].parse().ok()?;
-            syllables.push(LyricSyllable {
-                text: clean_text,
-                start_ms,
-                end_ms: start_ms + duration_ms,
-                ends_with_space,
-                ..Default::default()
-            });
+            let syllable = LyricSyllableBuilder::default()
+                .text(clean_text)
+                .start_ms(start_ms)
+                .end_ms(start_ms + duration_ms)
+                .ends_with_space(ends_with_space)
+                .duration_ms(duration_ms)
+                .build()
+                .unwrap();
+            syllables.push(syllable);
         }
     }
 
@@ -370,18 +375,18 @@ fn parse_single_qrc_line(line_str: &str) -> Option<(LyricLine, bool)> {
         syllables,
         ..Default::default()
     }];
-    let line = LyricLine {
-        start_ms,
-        end_ms,
-        tracks: vec![AnnotatedTrack {
+    let line = LyricLineBuilder::default()
+        .start_ms(start_ms)
+        .end_ms(end_ms)
+        .track(AnnotatedTrack {
             content: LyricTrack {
                 words,
                 ..Default::default()
             },
             ..Default::default()
-        }],
-        ..Default::default()
-    };
+        })
+        .build()
+        .unwrap();
 
     Some((line, is_candidate))
 }

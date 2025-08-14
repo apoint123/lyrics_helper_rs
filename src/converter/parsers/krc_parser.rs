@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use crate::converter::{
     TrackMetadataKey,
     types::{
-        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
-        LyricTrack, ParsedSourceData, Word,
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricLineBuilder,
+        LyricSyllable, LyricSyllableBuilder, LyricTrack, ParsedSourceData, Word,
     },
     utils::{normalize_text_whitespace, parse_and_store_metadata, process_syllable_text},
 };
@@ -66,13 +66,15 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                     let duration_ms: u64 = syl_caps["duration"].parse()?;
                     let absolute_start_ms = line_start_ms + offset_ms;
 
-                    syllables.push(LyricSyllable {
-                        text: clean_text,
-                        start_ms: absolute_start_ms,
-                        end_ms: absolute_start_ms + duration_ms,
-                        duration_ms: Some(duration_ms),
-                        ends_with_space,
-                    });
+                    let syllable = LyricSyllableBuilder::default()
+                        .text(clean_text)
+                        .start_ms(absolute_start_ms)
+                        .end_ms(absolute_start_ms + duration_ms)
+                        .duration_ms(duration_ms)
+                        .ends_with_space(ends_with_space)
+                        .build()
+                        .unwrap();
+                    syllables.push(syllable);
                 }
             }
 
@@ -95,10 +97,12 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                         metadata.insert(TrackMetadataKey::Language, "zh-Hans".to_string());
                         translation_tracks.push(LyricTrack {
                             words: vec![Word {
-                                syllables: vec![LyricSyllable {
-                                    text: normalized_text,
-                                    ..Default::default()
-                                }],
+                                syllables: vec![
+                                    LyricSyllableBuilder::default()
+                                        .text(normalized_text)
+                                        .build()
+                                        .unwrap(),
+                                ],
                                 ..Default::default()
                             }],
                             metadata,
@@ -114,12 +118,19 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                         let romanization_syllables: Vec<LyricSyllable> = syllables
                             .iter()
                             .zip(romanization_syllable_texts.iter())
-                            .map(|(main_syl, roma_text)| LyricSyllable {
-                                text: normalize_text_whitespace(roma_text),
-                                start_ms: main_syl.start_ms,
-                                end_ms: main_syl.end_ms,
-                                duration_ms: main_syl.duration_ms,
-                                ends_with_space: main_syl.ends_with_space,
+                            .map(|(main_syl, roma_text)| {
+                                let mut builder = LyricSyllableBuilder::default();
+                                builder
+                                    .text(normalize_text_whitespace(roma_text))
+                                    .start_ms(main_syl.start_ms)
+                                    .end_ms(main_syl.end_ms)
+                                    .ends_with_space(main_syl.ends_with_space);
+
+                                if let Some(d) = main_syl.duration_ms {
+                                    builder.duration_ms(d);
+                                }
+
+                                builder.build().unwrap()
                             })
                             .collect();
 
@@ -147,10 +158,12 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                             metadata.insert(TrackMetadataKey::Language, "ja-Latn".to_string());
                             romanization_tracks.push(LyricTrack {
                                 words: vec![Word {
-                                    syllables: vec![LyricSyllable {
-                                        text: normalized_text,
-                                        ..Default::default()
-                                    }],
+                                    syllables: vec![
+                                        LyricSyllableBuilder::default()
+                                            .text(normalized_text)
+                                            .build()
+                                            .unwrap(),
+                                    ],
                                     ..Default::default()
                                 }],
                                 metadata,
@@ -166,13 +179,14 @@ pub fn parse_krc(content: &str) -> Result<ParsedSourceData, ConvertError> {
                     romanizations: romanization_tracks,
                 };
 
-                lines.push(LyricLine {
-                    start_ms: line_start_ms,
-                    end_ms: line_start_ms + line_duration_ms,
-                    agent: Some("v1".to_string()),
-                    tracks: vec![annotated_track],
-                    ..Default::default()
-                });
+                let line = LyricLineBuilder::default()
+                    .start_ms(line_start_ms)
+                    .end_ms(line_start_ms + line_duration_ms)
+                    .agent(Some("v1".to_string()))
+                    .track(annotated_track)
+                    .build()
+                    .unwrap();
+                lines.push(line);
 
                 aux_line_index += 1;
             }

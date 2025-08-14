@@ -63,6 +63,7 @@ unicode-segmentation = "1.12.0"
 uuid = { version = "1", features = ["v4"] }
 bitflags = { version = "2.9.1", features = ["serde"] }
 fst = "0.4"
+derive_builder = "0.20.2"
 
 [dev-dependencies]
 insta = { version = "1.43.1", features = ["yaml"] }

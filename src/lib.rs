@@ -843,7 +843,7 @@ mod integration_tests {
     use super::*;
     use crate::converter::generators::ttml_generator;
     use crate::converter::processors::metadata_processor::MetadataStore;
-    use crate::converter::types::{AgentStore, TtmlGenerationOptions};
+    use crate::converter::types::AgentStore;
 
     fn init_tracing() {
         use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -950,10 +950,10 @@ mod integration_tests {
 
         let agent_store = AgentStore::from_metadata_store(&metadata_store);
 
-        let ttml_options = TtmlGenerationOptions {
-            format: false,
-            ..Default::default()
-        };
+        let ttml_options = converter::types::TtmlGenerationOptionsBuilder::default()
+            .format(false)
+            .build()
+            .unwrap();
 
         let ttml_output = ttml_generator::generate_ttml(
             &parsed_data.lines,

@@ -3,6 +3,7 @@
 use std::{collections::HashMap, fmt, io, path::PathBuf, str::FromStr};
 
 use bitflags::bitflags;
+use derive_builder::Builder;
 use quick_xml::{
     Error as QuickXmlErrorMain, encoding::EncodingError,
     events::attributes::AttrError as QuickXmlAttrError,
@@ -341,9 +342,11 @@ impl AgentStore {
 }
 
 /// 歌词行结构，作为多个并行带注解轨道的容器。
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Builder)]
+#[builder(default)]
 pub struct LyricLine {
     /// 该行包含的所有带注解的轨道。
+    #[builder(setter(each = "track"))]
     pub tracks: Vec<AnnotatedTrack>,
     /// 行的开始时间，相对于歌曲开始的绝对时间（毫秒）。
     pub start_ms: u64,
@@ -352,10 +355,13 @@ pub struct LyricLine {
     /// 可选的演唱者标识。
     ///
     /// 应该为数字 ID，例如 "v1"，"v1000"。
+    #[builder(setter(into, strip_option = false))]
     pub agent: Option<String>,
     /// 可选的歌曲组成部分标记。
+    #[builder(setter(into, strip_option = false))]
     pub song_part: Option<String>,
     /// 可选的 iTunes Key (如 "L1", "L2")。
+    #[builder(setter(into, strip_option = false))]
     pub itunes_key: Option<String>,
 }
 
@@ -539,9 +545,11 @@ impl LyricLine {
 }
 
 /// 通用的歌词音节结构，用于表示逐字歌词中的一个音节。
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, Builder)]
+#[builder(default)]
 pub struct LyricSyllable {
     /// 音节的文本内容。
+    #[builder(setter(into))]
     pub text: String,
     /// 音节开始时间，相对于歌曲开始的绝对时间（毫秒）。
     pub start_ms: u64,
@@ -550,6 +558,7 @@ pub struct LyricSyllable {
     /// 可选的音节持续时间（毫秒）。
     /// 如果提供，`end_ms` 可以由 `start_ms + duration_ms` 计算得出，反之亦然。
     /// 解析器应确保 `start_ms` 和 `end_ms` 最终被填充。
+    #[builder(setter(strip_option))]
     pub duration_ms: Option<u64>,
     /// 指示该音节后是否应有空格。
     pub ends_with_space: bool,
@@ -966,7 +975,8 @@ pub struct TtmlParsingOptions {
 }
 
 /// TTML 生成选项
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[builder(setter(into), default)]
 pub struct TtmlGenerationOptions {
     /// 生成的计时模式（逐字或逐行）。
     pub timing_mode: TtmlTimingMode,
@@ -1118,7 +1128,8 @@ pub struct ConversionOptions {
 }
 
 /// ASS 生成转换选项
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, Builder)]
+#[builder(setter(into), default)]
 pub struct AssGenerationOptions {
     /// 自定义的 [Script Info] 部分内容。如果为 `None`，则使用默认值。
     /// 用户提供的内容应包含 `[Script Info]` 头部。
@@ -1244,7 +1255,8 @@ pub enum LrcEndTimeOutputMode {
 }
 
 /// LRC 生成选项
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+#[builder(setter(into), default)]
 pub struct LrcGenerationOptions {
     /// 控制背景人声的输出方式
     pub sub_lines_output_mode: LrcSubLinesOutputMode,
@@ -1308,7 +1320,8 @@ pub struct FullConversionResult {
 // =============================================================================
 
 /// 控制平滑优化的选项。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Builder)]
+#[builder(setter(into), default)]
 pub struct SyllableSmoothingOptions {
     /// 用于平滑的因子 (0.0 ~ 0.5)。
     pub factor: f64,

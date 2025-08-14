@@ -10,8 +10,8 @@ use std::sync::LazyLock;
 use crate::converter::{
     TrackMetadataKey, Word,
     types::{
-        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
-        LyricTrack, ParsedSourceData,
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricLineBuilder,
+        LyricSyllable, LyricSyllableBuilder, LyricTrack, ParsedSourceData,
     },
 };
 
@@ -140,13 +140,15 @@ fn parse_karaoke_text(
 
                 // 只有当修剪后文本不为空时，才创建音节
                 if !text_to_store.is_empty() {
-                    syllables.push(LyricSyllable {
-                        text: text_to_store,
-                        start_ms: current_time_ms,
-                        end_ms: syllable_end_ms,
-                        duration_ms: Some(syllable_duration_ms),
-                        ends_with_space,
-                    });
+                    let syllable = LyricSyllableBuilder::default()
+                        .text(text_to_store)
+                        .start_ms(current_time_ms)
+                        .end_ms(syllable_end_ms)
+                        .duration_ms(syllable_duration_ms)
+                        .ends_with_space(ends_with_space)
+                        .build()
+                        .unwrap();
+                    syllables.push(syllable);
                 }
                 // 推进时间
                 current_time_ms = syllable_end_ms;
@@ -183,13 +185,15 @@ fn parse_karaoke_text(
             }
 
             if !text_to_store.is_empty() {
-                syllables.push(LyricSyllable {
-                    text: text_to_store,
-                    start_ms: current_time_ms,
-                    end_ms: syllable_end_ms,
-                    duration_ms: Some(syllable_duration_ms),
-                    ends_with_space,
-                });
+                let syllable = LyricSyllableBuilder::default()
+                    .text(text_to_store)
+                    .start_ms(current_time_ms)
+                    .end_ms(syllable_end_ms)
+                    .duration_ms(syllable_duration_ms)
+                    .ends_with_space(ends_with_space)
+                    .build()
+                    .unwrap();
+                syllables.push(syllable);
             }
             current_time_ms = syllable_end_ms;
         }
@@ -346,12 +350,14 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
                 let words = if syllables.is_empty() && !has_karaoke_tags {
                     // 对于逐行歌词，即使没有音节，也创建一个包含整行文本的Word
                     vec![Word {
-                        syllables: vec![LyricSyllable {
-                            text: text_content.to_string(),
-                            start_ms,
-                            end_ms: start_ms,
-                            ..Default::default()
-                        }],
+                        syllables: vec![
+                            LyricSyllableBuilder::default()
+                                .text(text_content.to_string())
+                                .start_ms(start_ms)
+                                .end_ms(start_ms)
+                                .build()
+                                .unwrap(),
+                        ],
                         ..Default::default()
                     }]
                 } else if syllables.is_empty() {
@@ -375,22 +381,23 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
                     romanizations: vec![],
                 };
 
-                let mut new_line = LyricLine {
-                    start_ms,
-                    end_ms: calculated_end_ms,
-                    agent: if actor_info.is_background {
+                let mut new_line = LyricLineBuilder::default()
+                    .start_ms(start_ms)
+                    .end_ms(calculated_end_ms)
+                    .agent(if actor_info.is_background {
                         None
                     } else {
                         actor_info.agent
-                    },
-                    song_part: if actor_info.is_background {
+                    })
+                    .song_part(if actor_info.is_background {
                         None
                     } else {
                         actor_info.song_part
-                    },
-                    tracks: vec![annotated_track],
-                    itunes_key: None,
-                };
+                    })
+                    .tracks(vec![annotated_track])
+                    .itunes_key(None)
+                    .build()
+                    .unwrap();
 
                 // 对于逐行歌词，使用 dialogue 的结束时间
                 if !has_karaoke_tags {
@@ -414,12 +421,15 @@ pub fn parse_ass(content: &str) -> Result<ParsedSourceData, ConvertError> {
 
                         let words = if syllables.is_empty() && !has_karaoke_tags {
                             vec![Word {
-                                syllables: vec![LyricSyllable {
-                                    text: text_content.to_string(),
-                                    start_ms,
-                                    end_ms: start_ms,
-                                    ..Default::default()
-                                }],
+                                syllables: vec![
+                                    LyricSyllableBuilder::default()
+                                        .text(text_content.to_string())
+                                        .start_ms(start_ms)
+                                        .end_ms(start_ms)
+                                        .build()
+                                        .unwrap(),
+                                ],
+
                                 ..Default::default()
                             }]
                         } else if syllables.is_empty() {

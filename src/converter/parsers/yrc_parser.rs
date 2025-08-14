@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use crate::converter::{
     types::{
-        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
-        LyricTrack, ParsedSourceData, Word,
+        AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricLineBuilder,
+        LyricSyllable, LyricTrack, ParsedSourceData, Word,
     },
     utils::process_syllable_text,
 };
@@ -60,13 +60,14 @@ fn parse_yrc_line(line_str: &str, line_num: usize) -> Result<LyricLine, ConvertE
             let syl_start_ms: u64 = captures["start"].parse()?;
             let syl_duration_ms: u64 = captures["duration"].parse()?;
 
-            syllables.push(LyricSyllable {
-                text: clean_text,
-                start_ms: syl_start_ms,
-                end_ms: syl_start_ms + syl_duration_ms,
-                duration_ms: Some(syl_duration_ms),
-                ends_with_space,
-            });
+            let syllable = crate::converter::types::LyricSyllableBuilder::default()
+                .text(clean_text)
+                .start_ms(syl_start_ms)
+                .end_ms(syl_start_ms + syl_duration_ms)
+                .ends_with_space(ends_with_space)
+                .build()
+                .unwrap();
+            syllables.push(syllable);
         }
     }
 
@@ -86,12 +87,12 @@ fn parse_yrc_line(line_str: &str, line_num: usize) -> Result<LyricLine, ConvertE
         ..Default::default()
     };
 
-    Ok(LyricLine {
-        start_ms: line_start_ms,
-        end_ms: line_start_ms + line_duration_ms,
-        tracks: vec![annotated_track],
-        ..Default::default()
-    })
+    Ok(LyricLineBuilder::default()
+        .start_ms(line_start_ms)
+        .end_ms(line_start_ms + line_duration_ms)
+        .track(annotated_track)
+        .build()
+        .unwrap())
 }
 
 /// 解析 YRC 格式内容到 `ParsedSourceData` 结构。

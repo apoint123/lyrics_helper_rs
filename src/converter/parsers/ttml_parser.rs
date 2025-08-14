@@ -162,13 +162,15 @@ struct DetailedAuxiliaryTracks {
 /// 存储 `<metadata>` 区域解析状态的结构体。
 #[derive(Debug, Default)]
 struct MetadataParseState {
-    translation_map: HashMap<String, (String, Option<String>)>,
+    line_translation_map: HashMap<String, (LineTranslation, Option<String>)>,
     timed_track_map: HashMap<String, DetailedAuxiliaryTracks>,
 
     context: MetadataContext,
     current_main_syllables: Vec<LyricSyllable>,
     current_bg_syllables: Vec<LyricSyllable>,
-    current_plain_text: String,
+
+    current_main_plain_text: String,
+    current_bg_plain_text: String,
 
     span_stack: Vec<SpanContext>,
     text_buffer: String,
@@ -237,6 +239,13 @@ enum LastSyllableInfo {
         /// 标记这个音节是否属于背景人声
         was_background: bool,
     },
+}
+
+/// 用于存储从 `<head>` 中解析的逐行翻译。
+#[derive(Debug, Default, Clone)]
+struct LineTranslation {
+    main: Option<String>,
+    background: Option<String>,
 }
 
 // =================================================================================
@@ -403,11 +412,10 @@ fn handle_metadata_event(
             TAG_NAME | TAG_NAME_TTM => {
                 if let MetadataContext::InAgent { id: Some(agent_id) } = &meta_state.context {
                     let name = reader.read_text(e.name())?.into_owned();
-                    if !name.trim().is_empty() {
-                        // MODIFICATION: Update the name in the Agent struct within the store
-                        if let Some(agent) = state.agent_store.agents_by_id.get_mut(agent_id) {
-                            agent.name = Some(name.trim().to_string());
-                        }
+                    if !name.trim().is_empty()
+                        && let Some(agent) = state.agent_store.agents_by_id.get_mut(agent_id)
+                    {
+                        agent.name = Some(name.trim().to_string());
                     }
                 }
             }
@@ -458,9 +466,10 @@ fn handle_metadata_event(
                         lang: lang.clone(),
                         key,
                     };
+                    meta_state.current_main_plain_text.clear();
+                    meta_state.current_bg_plain_text.clear();
                     meta_state.current_main_syllables.clear();
                     meta_state.current_bg_syllables.clear();
-                    meta_state.current_plain_text.clear();
                     meta_state.span_stack.clear();
                     meta_state.text_buffer.clear();
                 }
@@ -498,9 +507,13 @@ fn handle_metadata_event(
         },
         Event::Text(e) => {
             if !meta_state.span_stack.is_empty() {
+                // 处理在 span 内部的文本
                 meta_state.text_buffer.push_str(&e.xml_content()?);
             } else if matches!(meta_state.context, MetadataContext::InAuxiliaryText { .. }) {
-                meta_state.current_plain_text.push_str(&e.xml_content()?);
+                // 处理 `<text>` 标签直接子节点中的文本（即主翻译）
+                meta_state
+                    .current_main_plain_text
+                    .push_str(&e.xml_content()?);
             } else if matches!(meta_state.context, MetadataContext::InSongwriter) {
                 raw_metadata
                     .entry("songwriters".to_string())
@@ -557,9 +570,19 @@ fn handle_metadata_event(
                             target_syllables,
                         );
                     } else if !raw_text.trim().is_empty() {
-                        // 如果 span 没有时间戳，但包含非空白文本，
-                        // 将其内容追加到外层的纯文本缓冲区。
-                        meta_state.current_plain_text.push_str(&raw_text);
+                        let is_within_background_container = meta_state
+                            .span_stack
+                            .iter()
+                            .any(|s| s.role == SpanRole::Background);
+
+                        let is_background_span = ended_span_ctx.role == SpanRole::Background
+                            || is_within_background_container;
+
+                        if is_background_span {
+                            meta_state.current_bg_plain_text.push_str(&raw_text);
+                        } else {
+                            meta_state.current_main_plain_text.push_str(&raw_text);
+                        }
                     }
                 }
             }
@@ -570,20 +593,36 @@ fn handle_metadata_event(
                     key: Some(text_key),
                 } = &meta_state.context
                 {
-                    let trimmed_plain = meta_state.current_plain_text.trim();
+                    let main_plain_text = meta_state.current_main_plain_text.trim();
+                    let bg_plain_text = meta_state.current_bg_plain_text.trim();
+                    let has_plain_text = !main_plain_text.is_empty() || !bg_plain_text.is_empty();
+
                     let has_main_syllables = !meta_state.current_main_syllables.is_empty();
                     let has_bg_syllables = !meta_state.current_bg_syllables.is_empty();
 
                     // 判断是逐行翻译，还是带时间的辅助轨道
                     if !has_main_syllables
                         && !has_bg_syllables
-                        && !trimmed_plain.is_empty()
+                        && has_plain_text
                         && matches!(aux_type, AuxTrackType::Translation)
                     {
-                        // 是逐行翻译，存入 translation_map。
+                        // 是逐行翻译，存入 line_translation_map
+                        let line_translation = LineTranslation {
+                            main: if main_plain_text.is_empty() {
+                                None
+                            } else {
+                                Some(main_plain_text.to_string())
+                            },
+                            background: if bg_plain_text.is_empty() {
+                                None
+                            } else {
+                                Some(bg_plain_text.to_string())
+                            },
+                        };
+
                         meta_state
-                            .translation_map
-                            .insert(text_key.clone(), (trimmed_plain.to_string(), lang.clone()));
+                            .line_translation_map
+                            .insert(text_key.clone(), (line_translation, lang.clone()));
                     } else if has_main_syllables || has_bg_syllables {
                         // 是带时间戳的辅助轨道，存入 timed_track_map。
                         let entry = meta_state
@@ -627,7 +666,8 @@ fn handle_metadata_event(
                         }
                     }
 
-                    meta_state.current_plain_text.clear();
+                    meta_state.current_main_plain_text.clear();
+                    meta_state.current_bg_plain_text.clear();
                 }
                 // 回到上一级上下文
                 if let MetadataContext::InAuxiliaryText { aux_type, lang, .. } = &meta_state.context
@@ -764,41 +804,50 @@ fn handle_p_end(
     if let Some(mut p_data) = state.body_state.current_p_element_data.take() {
         if let Some(key) = &p_data.itunes_key {
             // 回填逐行翻译
-            if let Some((text, lang)) = state.metadata_state.translation_map.get(key) {
-                // 将其附加到第一个主内容轨道上
-                if let Some(main_annotated_track) = p_data
-                    .tracks_accumulator
-                    .iter_mut()
-                    .find(|at| at.content_type == ContentType::Main)
+            if let Some((line_translation, lang)) =
+                state.metadata_state.line_translation_map.get(key)
+            {
+                // 处理主音轨翻译
+                if let Some(main_text) = &line_translation.main
+                    && let Some(main_annotated_track) = p_data
+                        .tracks_accumulator
+                        .iter_mut()
+                        .find(|at| at.content_type == ContentType::Main)
                 {
                     // 检查是否已存在具有相同文本的翻译轨道
                     let translation_exists =
                         main_annotated_track.translations.iter().any(|track| {
                             track
                                 .words
-                                .first()
-                                .and_then(|w| w.syllables.first())
-                                .is_some_and(|s| s.text == *text)
+                                .iter()
+                                .flat_map(|w| &w.syllables)
+                                .any(|s| s.text == *main_text)
                         });
 
                     if !translation_exists {
-                        let syllable = LyricSyllable {
-                            text: text.clone(),
-                            ..Default::default()
-                        };
-                        let word = Word {
-                            syllables: vec![syllable],
-                            ..Default::default()
-                        };
-                        let mut metadata = HashMap::new();
-                        if let Some(lang_code) = lang {
-                            metadata.insert(TrackMetadataKey::Language, lang_code.clone());
-                        }
-                        let translation_track = LyricTrack {
-                            words: vec![word],
-                            metadata,
-                        };
+                        let translation_track =
+                            create_simple_translation_track(main_text, lang.as_ref());
                         main_annotated_track.translations.push(translation_track);
+                    }
+                }
+
+                // 处理背景人声音轨的翻译
+                if let Some(bg_text) = &line_translation.background {
+                    let bg_annotated_track =
+                        get_or_create_target_annotated_track(&mut p_data, ContentType::Background);
+
+                    let translation_exists = bg_annotated_track.translations.iter().any(|track| {
+                        track
+                            .words
+                            .iter()
+                            .flat_map(|w| &w.syllables)
+                            .any(|s| s.text == *bg_text)
+                    });
+
+                    if !translation_exists {
+                        let translation_track =
+                            create_simple_translation_track(bg_text, lang.as_ref());
+                        bg_annotated_track.translations.push(translation_track);
                     }
                 }
             }
@@ -1068,9 +1117,6 @@ fn process_span_end(
     state: &mut TtmlParserState,
     warnings: &mut Vec<String>,
 ) -> Result<(), ConvertError> {
-    // 重置，因为 span 已经结束
-    state.body_state.last_syllable_info = LastSyllableInfo::None;
-
     // 从堆栈中弹出刚刚结束的 span 的上下文
     if let Some(ended_span_ctx) = state.body_state.span_stack.pop() {
         // 获取并清空缓冲区中的文本
@@ -1785,6 +1831,25 @@ fn get_or_create_target_annotated_track(
             ..Default::default()
         });
         p_data.tracks_accumulator.last_mut().unwrap() // 刚插入，所以 unwrap 是安全的
+    }
+}
+
+fn create_simple_translation_track(text: &str, lang: Option<&String>) -> LyricTrack {
+    let syllable = LyricSyllable {
+        text: text.to_string(),
+        ..Default::default()
+    };
+    let word = Word {
+        syllables: vec![syllable],
+        ..Default::default()
+    };
+    let mut metadata = HashMap::new();
+    if let Some(lang_code) = lang {
+        metadata.insert(TrackMetadataKey::Language, lang_code.clone());
+    }
+    LyricTrack {
+        words: vec![word],
+        metadata,
     }
 }
 

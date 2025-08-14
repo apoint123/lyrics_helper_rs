@@ -12,8 +12,8 @@ use std::sync::LazyLock;
 
 use crate::converter::{
     types::{
-        AnnotatedTrack, ContentType, ConvertError, LyricLine, LyricSyllable, LyricTrack,
-        ParsedSourceData, Word,
+        AnnotatedTrack, ContentType, ConvertError, LyricLine, LyricLineBuilder, LyricSyllable,
+        LyricSyllableBuilder, LyricTrack, ParsedSourceData, Word,
     },
     utils::{normalize_text_whitespace, parse_and_store_metadata},
 };
@@ -72,36 +72,38 @@ pub fn parse_enhanced_lrc(content: &str) -> Result<ParsedSourceData, ConvertErro
                     }],
                     ..Default::default()
                 };
-                LyricLine {
-                    start_ms: final_line_start_ms,
-                    tracks: vec![AnnotatedTrack {
+                LyricLineBuilder::default()
+                    .start_ms(final_line_start_ms)
+                    .track(AnnotatedTrack {
                         content_type: ContentType::Main,
                         content: main_track,
                         ..Default::default()
-                    }],
-                    ..Default::default()
-                }
+                    })
+                    .build()
+                    .unwrap()
             } else if !line_content.trim().is_empty() {
                 let main_track = LyricTrack {
                     words: vec![Word {
-                        syllables: vec![LyricSyllable {
-                            text: normalize_text_whitespace(line_content),
-                            start_ms: line_start_ms,
-                            ..Default::default()
-                        }],
+                        syllables: vec![
+                            LyricSyllableBuilder::default()
+                                .text(normalize_text_whitespace(line_content))
+                                .start_ms(line_start_ms)
+                                .build()
+                                .unwrap(),
+                        ],
                         ..Default::default()
                     }],
                     ..Default::default()
                 };
-                LyricLine {
-                    start_ms: line_start_ms,
-                    tracks: vec![AnnotatedTrack {
+                LyricLineBuilder::default()
+                    .start_ms(line_start_ms)
+                    .track(AnnotatedTrack {
                         content_type: ContentType::Main,
                         content: main_track,
                         ..Default::default()
-                    }],
-                    ..Default::default()
-                }
+                    })
+                    .build()
+                    .unwrap()
             } else {
                 continue;
             };
@@ -183,13 +185,18 @@ fn parse_syllables_from_line(
                 None
             };
 
-            syllables.push(LyricSyllable {
-                text,
-                start_ms: *current_time,
-                end_ms,
-                duration_ms,
-                ends_with_space,
-            });
+            let mut builder = LyricSyllableBuilder::default();
+            builder
+                .text(text)
+                .start_ms(*current_time)
+                .end_ms(end_ms)
+                .ends_with_space(ends_with_space);
+
+            if let Some(d) = duration_ms {
+                builder.duration_ms(d);
+            }
+
+            syllables.push(builder.build().unwrap());
         }
     }
     syllables

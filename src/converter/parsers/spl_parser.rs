@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::converter::{
     types::{
         AnnotatedTrack, ContentType, ConvertError, LyricFormat, LyricLine, LyricSyllable,
-        LyricTrack, ParsedSourceData, Word,
+        LyricSyllableBuilder, LyricTrack, ParsedSourceData, Word,
     },
     utils::process_syllable_text,
 };
@@ -84,13 +84,14 @@ fn parse_syllables(
         if let Some((clean_text, ends_with_space)) =
             process_syllable_text(raw_segment_text, &mut syllables)
         {
-            syllables.push(LyricSyllable {
-                text: clean_text,
-                start_ms: current_time,
-                end_ms: next_time,
-                duration_ms: Some(next_time.saturating_sub(current_time)),
-                ends_with_space,
-            });
+            let syllable = LyricSyllableBuilder::default()
+                .text(clean_text)
+                .start_ms(current_time)
+                .end_ms(next_time)
+                .ends_with_space(ends_with_space)
+                .build()
+                .unwrap();
+            syllables.push(syllable);
         }
         current_time = next_time;
     }
@@ -99,18 +100,23 @@ fn parse_syllables(
     if let Some((clean_text, _)) = process_syllable_text(raw_last_segment, &mut syllables)
         && !clean_text.is_empty()
     {
-        syllables.push(LyricSyllable {
-            text: clean_text,
-            start_ms: current_time,
-            end_ms: line_end_ms,
-            duration_ms: Some(line_end_ms.saturating_sub(current_time)),
-            ends_with_space: false,
-        });
+        let syllable = LyricSyllableBuilder::default()
+            .text(clean_text)
+            .start_ms(current_time)
+            .end_ms(line_end_ms)
+            .duration_ms(line_end_ms.saturating_sub(current_time))
+            .ends_with_space(false)
+            .build()
+            .unwrap();
+        syllables.push(syllable);
     }
     Ok(syllables)
 }
 
 /// 解析 SPL 格式内容到 `ParsedSourceData` 结构。
+///
+/// # Panics
+/// 如果 `LyricSyllableBuilder` 构建失败，会导致panic
 pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
     let mut lines: Vec<LyricLine> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -226,12 +232,14 @@ pub fn parse_spl(content: &str) -> Result<ParsedSourceData, ConvertError> {
                 .iter()
                 .map(|translation_text| LyricTrack {
                     words: vec![Word {
-                        syllables: vec![LyricSyllable {
-                            text: translation_text.clone(),
-                            start_ms,
-                            end_ms: end_time,
-                            ..Default::default()
-                        }],
+                        syllables: vec![
+                            LyricSyllableBuilder::default()
+                                .text(translation_text.clone())
+                                .start_ms(start_ms)
+                                .end_ms(end_time)
+                                .build()
+                                .unwrap(),
+                        ],
                         ..Default::default()
                     }],
                     metadata: HashMap::new(),
